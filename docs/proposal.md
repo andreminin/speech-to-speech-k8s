@@ -1,4 +1,4 @@
-# Distributed Speech-to-Speech — Kubernetes Proposal
+# Distributed Speech-to-Speech - Kubernetes Proposal
 
 ## 1. Goals
 
@@ -773,7 +773,7 @@ rather than:
 
 # 17. Implementation plan
 
-## Phase 0 — hardware baseline
+## Phase 0 - hardware baseline
 
 ### Tasks
 
@@ -816,7 +816,7 @@ GPU visible on all nodes
 
 ------
 
-# Phase 1 — Kubernetes GPU foundation
+# Phase 1 - Kubernetes GPU foundation
 
 Install/verify:
 
@@ -851,7 +851,7 @@ CUDA pod on node1 → GPU works
 
 ------
 
-# Phase 2 — build S2S base image
+# Phase 2 - build S2S base image
 
 Create:
 
@@ -877,7 +877,7 @@ Do not blindly use the upstream image because your CUDA 13.2 environment require
 
 ------
 
-# Phase 3 — standalone STT service
+# Phase 3 - standalone STT service
 
 Deploy:
 
@@ -916,7 +916,7 @@ stable under 10+ minutes of continuous testing
 
 ------
 
-# Phase 4 — standalone TTS service
+# Phase 4 - standalone TTS service
 
 Deploy Qwen3-TTS.
 
@@ -949,7 +949,7 @@ streaming works
 
 ------
 
-# Phase 5 — standalone LLM
+# Phase 5 - standalone LLM
 
 Deploy the chosen quantized LLM on node3.
 
@@ -985,7 +985,7 @@ stable
 
 ------
 
-# Phase 6 — distributed gateway
+# Phase 6 - distributed gateway
 
 Implement:
 
@@ -1029,7 +1029,7 @@ Acceptance:
 
 ------
 
-# Phase 7 — streaming optimization
+# Phase 7 - streaming optimization
 
 First implementation:
 
@@ -1053,7 +1053,7 @@ The upstream STT implementation already distinguishes progressive transcription 
 
 ------
 
-# Phase 8 — Kubernetes productionization
+# Phase 8 - Kubernetes productionization
 
 Add:
 
@@ -1080,7 +1080,7 @@ TTS gets assigned based on benchmark results.
 
 ------
 
-# Phase 9 — observability
+# Phase 9 - observability
 
 Deploy:
 
@@ -1275,7 +1275,7 @@ Do it incrementally:
 14. Load/concurrency testing
 ```
 
-This is important because **the first unknown is not Kubernetes—it is the actual VRAM footprint of the chosen STT/LLM/TTS combination**.
+This is important because **the first unknown is not Kubernetes-it is the actual VRAM footprint of the chosen STT/LLM/TTS combination**.
 
 The upstream project is already evolving toward explicit local/remote backend boundaries and endpoint-shared inference coordination, so keeping our implementation behind clean STT/LLM/TTS service interfaces should minimize divergence from upstream. 
 

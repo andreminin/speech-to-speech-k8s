@@ -4,7 +4,7 @@ Distributed deployment of Hugging Face's [`speech-to-speech`](https://github.com
 
 ## Why
 
-See [`doc/Speech-to-Speech K8S Proposal.md`](doc/Speech-to-Speech%20K8S%20Proposal.md) for the original design proposal and hardware rationale, and [`docs/architecture.md`](docs/architecture.md) for the as-built architecture (an HTTP-first revision of that proposal - see below).
+See [`docs/proposal.md`](doc/Speech-to-Speech%20K8S%20Proposal.md) for the original design proposal and hardware rationale, and [`docs/architecture.md`](docs/architecture.md) for the as-built architecture (an HTTP-first revision of that proposal - see below).
 
 ## Architecture at a glance
 
