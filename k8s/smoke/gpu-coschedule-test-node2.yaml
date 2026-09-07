@@ -24,7 +24,7 @@ spec:
     - name: local-registry-cred
   containers:
     - name: hold-gpu
-      image: local-registry:5000/cuda-cudnn-runtime:12.8.1-cudnn-runtime-ubuntu24.04
+      image: local-registry:5000/cuda:12.9.1-cudnn-runtime-ubuntu24.04
       imagePullPolicy: IfNotPresent
       command: ["sleep", "300"]
       resources:
@@ -45,7 +45,7 @@ spec:
     - name: local-registry-cred
   containers:
     - name: hold-gpu
-      image: local-registry:5000/cuda-cudnn-runtime:12.8.1-cudnn-runtime-ubuntu24.04
+      image: local-registry:5000/cuda:12.9.1-cudnn-runtime-ubuntu24.04
       imagePullPolicy: IfNotPresent
       command: ["sleep", "300"]
       resources:

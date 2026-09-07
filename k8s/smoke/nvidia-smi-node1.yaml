@@ -1,12 +1,12 @@
 apiVersion: v1
 kind: Pod
 metadata:
-  name: nvidia-smi-node3
+  name: nvidia-smi-node1
   namespace: speech
 spec:
   restartPolicy: Never
   runtimeClassName: nvidia
-  nodeName: node3
+  nodeName: node1
   imagePullSecrets:
     - name: local-registry-cred
   containers:

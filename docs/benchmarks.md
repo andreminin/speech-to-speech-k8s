@@ -32,6 +32,6 @@ real, batch-of-1 usage) **and** yields the lower full-pipeline TTFA.
 
 _Not yet decided - fill in once Phase D actually runs._
 
-- **Chosen option**: —
-- **Reasoning**: —
-- **Date**: —
+- **Chosen option**: -
+- **Reasoning**: -
+- **Date**: -
