@@ -1,0 +1,35 @@
+# Mounted at /etc/speech-to-speech/config.json and passed as the single
+# positional argument to `speech-to-speech serve` (upstream supports a JSON
+# config file in place of a long argv — see src/speech_to_speech/s2s_pipeline.py
+# parse_arguments()). Editing this ConfigMap + a rollout restart is enough to
+# change flags without touching k8s/gateway/deployment.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gateway-config
+  namespace: speech
+data:
+  config.json: |
+    {
+      "host": "0.0.0.0",
+      "port": 8765,
+
+      "stt": "openai",
+      "openai_stt_base_url": "http://speech-stt.speech.svc.cluster.local:8001/v1",
+      "openai_stt_model": "nvidia/parakeet-tdt-0.6b-v3",
+      "openai_stt_response_format": "json",
+
+      "llm_backend": "responses-api",
+      "responses_api_base_url": "http://speech-llm.speech.svc.cluster.local:8080/v1",
+      "responses_api_api_key": "",
+      "model_name": "CHANGE_ME_gguf_model_id",
+      "init_chat_role": "system",
+      "init_chat_prompt": "You are a helpful voice assistant.",
+
+      "tts": "openai",
+      "openai_tts_base_url": "http://speech-tts.speech.svc.cluster.local:8002/v1",
+      "openai_tts_model": "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+      "openai_tts_voice": "aiden",
+      "openai_tts_sample_rate": 24000,
+      "openai_tts_stream": false
+    }

@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: speech-stt
+  namespace: speech
+  labels:
+    app: speech-stt
+spec:
+  replicas: 1  # no GPU failover with a single 16GB card per role — intentional, see docs/architecture.md
+  selector:
+    matchLabels:
+      app: speech-stt
+  template:
+    metadata:
+      labels:
+        app: speech-stt
+    spec:
+      runtimeClassName: nvidia
+      nodeName: node2
+      imagePullSecrets:
+        - name: local-registry-cred
+      containers:
+        - name: speech-stt
+          image: local-registry:5000/speech-stt:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: stt-config
+          ports:
+            - containerPort: 8001
+          resources:
+            requests:
+              nvidia.com/gpu: 1
+              cpu: "2"
+              memory: 4Gi
+            limits:
+              nvidia.com/gpu: 1
+              cpu: "4"
+              memory: 8Gi
+          volumeMounts:
+            - name: models
+              mountPath: /mnt/models/parakeet
+              subPath: parakeet
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8001 }
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8001 }
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            failureThreshold: 3
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: models-node2

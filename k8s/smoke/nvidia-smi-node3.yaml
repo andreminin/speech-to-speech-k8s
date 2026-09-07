@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nvidia-smi-node3
+  namespace: speech
+spec:
+  restartPolicy: Never
+  runtimeClassName: nvidia
+  nodeName: node3
+  imagePullSecrets:
+    - name: local-registry-cred
+  containers:
+    - name: nvidia-smi
+      image: local-registry:5000/cuda-cudnn-runtime:12.8.1-cudnn-runtime-ubuntu24.04
+      imagePullPolicy: IfNotPresent
+      command: ["nvidia-smi"]
+      resources:
+        limits:
+          nvidia.com/gpu: 1

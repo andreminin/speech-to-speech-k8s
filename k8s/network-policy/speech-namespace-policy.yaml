@@ -1,0 +1,22 @@
+# Phase F+ hardening, not required for the first milestone. Restricts
+# speech-stt/speech-llm/speech-tts ingress to only the speech-gateway pod,
+# since all three are unauthenticated HTTP services by design (see
+# docs/architecture.md "Security").
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: internal-services-from-gateway-only
+  namespace: speech
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: [speech-stt, speech-llm, speech-tts, speech-stt-tts]
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: speech-gateway

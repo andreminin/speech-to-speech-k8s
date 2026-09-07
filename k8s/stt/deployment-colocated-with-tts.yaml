@@ -1,0 +1,123 @@
+# ALTERNATIVE to k8s/stt/deployment.yaml + k8s/tts/deployment.yaml, for use
+# ONLY if the Phase A smoke test (k8s/smoke/) confirms that two separate
+# Deployments each requesting nvidia.com/gpu: 1 cannot both schedule onto
+# node2's single GPU (the expected outcome under default, non-MIG,
+# non-time-sliced device-plugin behavior — see docs/architecture.md).
+#
+# In that case, Option A (node2 = STT+TTS) must be a single Pod with two
+# containers sharing the one GPU device the Pod requests, not two
+# independent Deployments. Apply this INSTEAD OF k8s/stt/deployment.yaml and
+# k8s/tts/deployment.yaml when Option A wins the Phase D benchmark; keep
+# k8s/llm/deployment.yaml (node3) as-is either way.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: speech-stt-tts
+  namespace: speech
+  labels:
+    app: speech-stt-tts
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: speech-stt-tts
+  template:
+    metadata:
+      labels:
+        app: speech-stt-tts
+    spec:
+      runtimeClassName: nvidia
+      nodeName: node2
+      imagePullSecrets:
+        - name: local-registry-cred
+      containers:
+        - name: speech-stt
+          image: local-registry:5000/speech-stt:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: stt-config
+          ports:
+            - containerPort: 8001
+          resources:
+            # Only ONE container in this Pod declares the GPU request/limit —
+            # both processes still see the same physical device via
+            # NVIDIA_VISIBLE_DEVICES once the Pod is scheduled, since GPU
+            # visibility is a Pod-level (not per-container) grant under the
+            # device plugin.
+            requests:
+              nvidia.com/gpu: 1
+              cpu: "2"
+              memory: 4Gi
+            limits:
+              nvidia.com/gpu: 1
+              cpu: "4"
+              memory: 8Gi
+          volumeMounts:
+            - name: models
+              mountPath: /mnt/models/parakeet
+              subPath: parakeet
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8001 }
+            initialDelaySeconds: 30
+            periodSeconds: 10
+        - name: speech-tts
+          image: local-registry:5000/speech-tts:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: tts-config
+          ports:
+            - containerPort: 8002
+          resources:
+            # No GPU request here — this container rides on the Pod-level
+            # grant from the speech-stt container above. If your device
+            # plugin instead requires every container that touches the GPU
+            # to declare its own request, this manifest will need MIG/
+            # time-slicing configuration, which is out of scope for this
+            # milestone — fall back to running STT and TTS as two fully
+            # separate pipeline runs (not concurrently) instead.
+            requests:
+              cpu: "2"
+              memory: 4Gi
+            limits:
+              cpu: "4"
+              memory: 8Gi
+          volumeMounts:
+            - name: models
+              mountPath: /mnt/models/qwen3-tts
+              subPath: qwen3-tts
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8002 }
+            initialDelaySeconds: 30
+            periodSeconds: 10
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: models-node2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: speech-stt
+  namespace: speech
+spec:
+  type: ClusterIP
+  selector:
+    app: speech-stt-tts
+  ports:
+    - port: 8001
+      targetPort: 8001
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: speech-tts
+  namespace: speech
+spec:
+  type: ClusterIP
+  selector:
+    app: speech-stt-tts
+  ports:
+    - port: 8002
+      targetPort: 8002

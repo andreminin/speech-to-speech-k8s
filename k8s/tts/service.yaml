@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: speech-tts
+  namespace: speech
+spec:
+  type: ClusterIP
+  selector:
+    app: speech-tts
+  ports:
+    - port: 8002
+      targetPort: 8002

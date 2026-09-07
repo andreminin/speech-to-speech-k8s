@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: speech-gateway
+  namespace: speech
+  labels:
+    app: speech-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: speech-gateway
+  template:
+    metadata:
+      labels:
+        app: speech-gateway
+    spec:
+      # No GPU / runtimeClassName on this pod: VAD (Silero) and Smart Turn
+      # (ONNX) run fine on CPU, and once STT/LLM/TTS are remote HTTP calls,
+      # nothing left in this pod benefits from node1's 4GB card. See
+      # docs/architecture.md for the reasoning and the fallback plan if
+      # CPU VAD/turn-detection proves to hurt TTFA.
+      nodeName: node1
+      imagePullSecrets:
+        - name: local-registry-cred
+      containers:
+        - name: speech-gateway
+          image: local-registry:5000/speech-gateway:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - serve
+            - /etc/speech-to-speech/config.json
+          ports:
+            - containerPort: 8765
+          resources:
+            requests:
+              cpu: "1"
+              memory: 2Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          volumeMounts:
+            - name: gateway-config
+              mountPath: /etc/speech-to-speech
+              readOnly: true
+          readinessProbe:
+            httpGet: { path: /v1/pool, port: 8765 }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /v1/pool, port: 8765 }
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            failureThreshold: 3
+      volumes:
+        - name: gateway-config
+          configMap:
+            name: gateway-config

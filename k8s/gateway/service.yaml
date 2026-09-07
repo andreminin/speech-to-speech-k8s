@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: speech-gateway
+  namespace: speech
+spec:
+  type: ClusterIP
+  selector:
+    app: speech-gateway
+  ports:
+    - port: 8765
+      targetPort: 8765

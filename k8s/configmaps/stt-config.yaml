@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: stt-config
+  namespace: speech
+data:
+  STT_MODEL_NAME: "nvidia/parakeet-tdt-0.6b-v3"
+  STT_DEVICE: "cuda"
+  HF_HOME: "/mnt/models/parakeet"
+  HF_HUB_OFFLINE: "0"  # flip to "1" once weights are pre-pulled into the PV

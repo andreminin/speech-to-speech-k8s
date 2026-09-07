@@ -1,0 +1,12 @@
+# Placeholder for llama.cpp server args that benefit from being editable
+# without a rollout of the Deployment spec itself. The GGUF repo id is the
+# one value Phase B/D benchmarking is expected to change.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: llm-config
+  namespace: speech
+data:
+  LLM_HF_REPO: "CHANGE_ME_org/model-GGUF-repo"
+  LLM_CTX_SIZE: "65536"
+  LLM_PARALLEL: "2"

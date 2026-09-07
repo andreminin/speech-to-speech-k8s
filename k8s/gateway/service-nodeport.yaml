@@ -1,0 +1,17 @@
+# Client-facing exposure, WebSocket only (see docs/architecture.md for why
+# WebRTC is deferred — its RTP media path isn't proxyable through a simple
+# NodePort/Ingress HTTP path). Connect from the LAN with:
+#   speech-to-speech talk --url ws://<node1-ip>:30765/v1/realtime
+apiVersion: v1
+kind: Service
+metadata:
+  name: speech-gateway-external
+  namespace: speech
+spec:
+  type: NodePort
+  selector:
+    app: speech-gateway
+  ports:
+    - port: 8765
+      targetPort: 8765
+      nodePort: 30765

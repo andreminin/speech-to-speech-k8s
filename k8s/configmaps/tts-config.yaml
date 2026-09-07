@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tts-config
+  namespace: speech
+data:
+  TTS_MODEL_NAME: "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
+  TTS_DEVICE: "cuda"
+  TTS_BACKEND: "ggml"
+  TTS_VOICES: "aiden"
+  HF_HOME: "/mnt/models/qwen3-tts"
+  HF_HUB_OFFLINE: "0"  # flip to "1" once weights are pre-pulled into the PV

@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: speech-stt
+  namespace: speech
+spec:
+  type: ClusterIP
+  selector:
+    app: speech-stt
+  ports:
+    - port: 8001
+      targetPort: 8001

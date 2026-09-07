@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: speech-llm
+  namespace: speech
+  labels:
+    app: speech-llm
+spec:
+  replicas: 1  # no GPU failover with a single 16GB card per role — intentional, see docs/architecture.md
+  selector:
+    matchLabels:
+      app: speech-llm
+  template:
+    metadata:
+      labels:
+        app: speech-llm
+    spec:
+      runtimeClassName: nvidia
+      nodeName: node3
+      imagePullSecrets:
+        - name: local-registry-cred
+      containers:
+        - name: speech-llm
+          # Mirror ghcr.io/ggml-org/llama.cpp:server-cuda via scripts/mirror-images.sh
+          # if node3 has no direct internet egress; otherwise use the public tag.
+          image: local-registry:5000/llama-cpp-server-cuda:server-cuda
+          imagePullPolicy: IfNotPresent
+          # NOTE: $(VAR) expansion in args/command only resolves vars listed
+          # explicitly under `env:` below (not `envFrom:` — kubelet doesn't
+          # track envFrom-sourced vars for command-line substitution).
+          env:
+            - name: LLM_HF_REPO
+              valueFrom: { configMapKeyRef: { name: llm-config, key: LLM_HF_REPO } }
+            - name: LLM_CTX_SIZE
+              valueFrom: { configMapKeyRef: { name: llm-config, key: LLM_CTX_SIZE } }
+            - name: LLM_PARALLEL
+              valueFrom: { configMapKeyRef: { name: llm-config, key: LLM_PARALLEL } }
+          args:
+            - -hf
+            - $(LLM_HF_REPO)
+            - -np
+            - "$(LLM_PARALLEL)"
+            - -c
+            - "$(LLM_CTX_SIZE)"
+            - -fa
+            - "on"
+            - --swa-full
+            - --host
+            - "0.0.0.0"
+            - --port
+            - "8080"
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              nvidia.com/gpu: 1
+              cpu: "2"
+              memory: 4Gi
+            limits:
+              nvidia.com/gpu: 1
+              cpu: "4"
+              memory: 8Gi
+          volumeMounts:
+            - name: models
+              mountPath: /root/.cache
+              subPath: llm
+          readinessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            failureThreshold: 3
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: models-node3
