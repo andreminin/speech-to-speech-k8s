@@ -13,14 +13,14 @@ Run each row with the same test utterance(s)/prompt(s). Record **VRAM**
 **TTFA** (time from user-audio-end to first synthesized-audio byte reaching
 the gateway).
 
-| Row | Config | Node(s) | VRAM (MB) | Latency / TTFA (ms) | Notes |
-|---|---|---|---|---|---|
-| STT alone | speech-stt only | node2 | _tbd_ | _tbd_ | |
+| Row | Config | Node(s)       | VRAM (MB) | Latency / TTFA (ms) | Notes |
+|---|---|---------------|---|---|---|
+| STT alone | speech-stt only | node2         | _tbd_ | _tbd_ | |
 | TTS alone | speech-tts only | node2 (trial) | _tbd_ | _tbd_ | |
-| LLM alone | speech-llm only | node3 | _tbd_ | _tbd_ | TTFT specifically |
-| STT+TTS co-located | speech-stt + speech-tts | node2 | _tbd_ | _tbd_ | Option A trial - use `k8s/stt/deployment-colocated-with-tts.yaml` if separate Deployments won't co-schedule |
-| LLM+TTS co-located | speech-llm + speech-tts | node3 | _tbd_ | _tbd_ | Option B trial |
-| Full pipeline | gateway + stt + llm + tts | node1/2/3 | n/a | _tbd_ | real e2e TTFA, the headline number |
+| LLM alone | speech-llm only | node2 (gemma-4-E4B-it-Q8_0)      | 8709 | _tbd_ | TTFT specifically |
+| STT+TTS co-located | speech-stt + speech-tts | node2         | _tbd_ | _tbd_ | Option A trial - use `k8s/stt/deployment-colocated-with-tts.yaml` if separate Deployments won't co-schedule |
+| LLM+TTS co-located | speech-llm + speech-tts | node3         | _tbd_ | _tbd_ | Option B trial |
+| Full pipeline | gateway + stt + llm + tts | node1/2/3     | n/a | _tbd_ | real e2e TTFA, the headline number |
 
 ## Decision rule
 

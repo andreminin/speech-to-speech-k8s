@@ -6,7 +6,7 @@ metadata:
   labels:
     app: speech-tts
 spec:
-  replicas: 1  # no GPU failover with a single 16GB card per role — intentional, see docs/architecture.md
+  replicas: 1
   selector:
     matchLabels:
       app: speech-tts
@@ -16,23 +16,20 @@ spec:
         app: speech-tts
     spec:
       runtimeClassName: nvidia
-      # PLACEMENT UNDETERMINED until the Phase D benchmark (see docs/benchmarks.md).
-      # Defaulted to node2 (Option A: node2=STT+TTS, node3=LLM) as the first
-      # trial. To switch to Option B (node2=STT, node3=LLM+TTS), change
-      # nodeName to node3, the volumes[].persistentVolumeClaim.claimName to
-      # models-node3, and re-check GPU co-scheduling per k8s/smoke/README.md.
-      nodeName: node2
+      nodeName: node3   # model will be on node3
       imagePullSecrets:
         - name: local-registry-cred
       containers:
         - name: speech-tts
           image: local-registry:5000/speech-tts:latest
           imagePullPolicy: IfNotPresent
-          envFrom:
-            - configMapRef:
-                name: tts-config
+          env:
+            - name: MODEL_NAME
+              value: "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
+            - name: MODEL_CACHE_DIR
+              value: "/models"
           ports:
-            - containerPort: 8002
+            - containerPort: 8080
           resources:
             requests:
               nvidia.com/gpu: 1
@@ -44,18 +41,36 @@ spec:
               memory: 8Gi
           volumeMounts:
             - name: models
-              mountPath: /mnt/models/qwen3-tts
-              subPath: qwen3-tts
+              mountPath: /models
           readinessProbe:
-            httpGet: { path: /healthz, port: 8002 }
+            httpGet:
+              path: /health
+              port: 8080
             initialDelaySeconds: 30
             periodSeconds: 10
           livenessProbe:
-            httpGet: { path: /healthz, port: 8002 }
+            httpGet:
+              path: /health
+              port: 8080
             initialDelaySeconds: 60
             periodSeconds: 20
             failureThreshold: 3
       volumes:
         - name: models
-          persistentVolumeClaim:
-            claimName: models-node2
+          hostPath:
+            path: /mnt/local-fast/tts-model
+            type: Directory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: speech-tts-service
+  namespace: speech
+spec:
+  selector:
+    app: speech-tts
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+  type: ClusterIP

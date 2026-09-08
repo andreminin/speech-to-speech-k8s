@@ -104,16 +104,64 @@ Once validated, proceed to Phase B below.
 
 ## Phase B - `speech-llm` standalone
 
-1. Set the real GGUF model repo in `k8s/configmaps/llm-config.yaml`
-   (`LLM_HF_REPO`, "Qwen/Qwen3-8B-GGUF" by default), and the image tag in `k8s/llm/deployment.yaml` if you
-   mirrored `llama.cpp:server-cuda` under a different tag.
-2. ```bash
+The LLM uses a fast NVMe hostPath mount (/mnt/local-fast) rather than a PVC for maximum I/O performance and to avoid copying multi‑GB model files into Longhorn.
+
+On the node that will run the LLM (we use node2 in this guide), download the GGUF model file:
+```bash
+# On node2 (or a machine with internet access, then scp the file to node2)
+mkdir -p /mnt/local-fast/gemma-model
+cd /mnt/local-fast/gemma-model
+
+# Using huggingface-cli (hf) – install with `uv` if needed:
+# uv venv -p 3.12 --seed
+# source .venv/bin/activate
+# uv pip install huggingface-hub
+hf download ggml-org/gemma-4-E4B-it-GGUF --include "gemma-4-E4B-it-Q8_0.gguf" --local-dir .
+
+# Alternatively, use wget if you know the direct URL:
+# wget -O gemma-4-E4B-it-Q8_0.gguf https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q8_0.gguf
+```
+Make the file world‑readable so the container can access it:
+```bash
+sudo chmod -R a+rX /mnt/local-fast/gemma-model
+```
+Note: The Q8_0 quantisation uses ~8 GB of VRAM and offers higher accuracy than Q4_0. With 16 GB GPUs on node2/node3, this is the recommended trade‑off. If you have less VRAM, use the Q4_0 variant instead.
+
+2. Configure the LLM deployment
+Ensure k8s/configmaps/llm-config.yaml has the correct context size and parallelism:
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: llm-config
+  namespace: speech
+data:
+  LLM_CTX_SIZE: "65536"
+  LLM_PARALLEL: "2"
+```    
+Update the deployment manifest k8s/llm/deployment.yaml. The critical parts are:
+
+    nodeName: node2 – pin to the node where the model is stored
+
+    hostPath volume pointing to /mnt/local-fast/gemma-model
+
+    args using --model /models/gemma-4-E4B-it-Q8_0.gguf (local file, not -hf)
+3. Deploy and validate
+```bash
+./scripts/deploy.sh llm
+kubectl -n speech rollout status deployment/speech-llm
+```
+Once the pod is Running, test the endpoint:
+```bash
+kubectl run curl-test --namespace=speech --image=local-registry:5000/cuda:12.9.1-cudnn-runtime-ubuntu24.04 --rm -it --restart=Never --overrides='{"spec":{"imagePullSecrets":[{"name":"local-registry-cred"}],"containers":[{"name":"curl","image":"local-registry:5000/cuda:12.9.1-cudnn-runtime-ubuntu24.04","command":["curl","-s","-X","POST","http://speech-llm-service:8080/v1/completions","-H","Content-Type: application/json","-d","{\"prompt\":\"What is the capital of France?\",\"max_tokens\":30}"]}]}}'
+```
+```bash
    ./scripts/deploy.sh llm
    kubectl -n speech rollout status deployment/speech-llm
    ./scripts/smoke-test.sh llm
    ./scripts/record-vram.sh <speech-llm-pod-name>
    ```
-3. Record VRAM in `docs/benchmarks.md` as the "LLM alone" row.
+4. Record VRAM in `docs/benchmarks.md` as the "LLM alone" row.
 
 ## Phase C - `speech-stt` standalone
 
@@ -124,9 +172,9 @@ Once validated, proceed to Phase B below.
    (update `image:` in `k8s/stt/deployment.yaml` to match `<tag>` if not `latest`)
 2. ```bash
    ./scripts/deploy.sh stt
-   kubectl -n speech rollout status deployment/speech-stt
-   ./scripts/smoke-test.sh stt /path/to/16khz-mono-sample.wav
-   ./scripts/record-vram.sh <speech-stt-pod-name>
+    kubectl -n speech rollout status deployment/speech-stt
+    ./scripts/smoke-test.sh stt /path/to/16khz-mono-sample.wav
+    ./scripts/record-vram.sh $(kubectl get pods -n speech -l app=speech-stt -o jsonpath='{.items[0].metadata.name}')
    ```
 3. Record VRAM + latency in `docs/benchmarks.md` as "STT alone."
 

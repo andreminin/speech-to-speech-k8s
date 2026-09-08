@@ -2,7 +2,7 @@
 # Same CUDA/cuDNN base as upstream speech-to-speech's own Dockerfile.
 #
 # Build: docker build -t local-registry:5000/speech-tts:<tag> tts/
-FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
+FROM local-registry:5000/cuda:12.9.1-cudnn-runtime-ubuntu24.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip libsndfile1 \

@@ -15,23 +15,22 @@ spec:
       labels:
         app: speech-gateway
     spec:
-      # No GPU / runtimeClassName on this pod: VAD (Silero) and Smart Turn
-      # (ONNX) run fine on CPU, and once STT/LLM/TTS are remote HTTP calls,
-      # nothing left in this pod benefits from node1's 4GB card. See
-      # docs/architecture.md for the reasoning and the fallback plan if
-      # CPU VAD/turn-detection proves to hurt TTFA.
-      nodeName: node1
       imagePullSecrets:
         - name: local-registry-cred
+      nodeName: node0   # CPU‑only, can run on control‑plane
       containers:
         - name: speech-gateway
           image: local-registry:5000/speech-gateway:latest
           imagePullPolicy: IfNotPresent
-          args:
-            - serve
-            - /etc/speech-to-speech/config.json
+          env:
+            - name: STT_URL
+              value: "http://speech-stt-service:8080"
+            - name: LLM_URL
+              value: "http://speech-llm-service:8080"
+            - name: TTS_URL
+              value: "http://speech-tts-service:8080"
           ports:
-            - containerPort: 8765
+            - containerPort: 8080
           resources:
             requests:
               cpu: "1"
@@ -39,20 +38,30 @@ spec:
             limits:
               cpu: "2"
               memory: 4Gi
-          volumeMounts:
-            - name: gateway-config
-              mountPath: /etc/speech-to-speech
-              readOnly: true
           readinessProbe:
-            httpGet: { path: /v1/pool, port: 8765 }
-            initialDelaySeconds: 20
-            periodSeconds: 10
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
           livenessProbe:
-            httpGet: { path: /v1/pool, port: 8765 }
+            httpGet:
+              path: /health
+              port: 8080
             initialDelaySeconds: 30
-            periodSeconds: 20
-            failureThreshold: 3
-      volumes:
-        - name: gateway-config
-          configMap:
-            name: gateway-config
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: speech-gateway-service
+  namespace: speech
+spec:
+  selector:
+    app: speech-gateway
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+      nodePort: 30765   # or leave as ClusterIP and use port‑forward
+  type: NodePort       # external access for client

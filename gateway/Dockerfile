@@ -7,7 +7,7 @@
 # at the revision you want to pin, e.g.:
 #   docker build -f gateway/Dockerfile -t local-registry:5000/speech-gateway:<tag> \
 #     /path/to/speech-to-speech-checkout
-FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
+FROM local-registry:5000/cuda:12.9.1-cudnn-runtime-ubuntu24.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates git libportaudio2 libsndfile1 \

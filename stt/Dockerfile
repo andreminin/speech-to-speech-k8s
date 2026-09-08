@@ -3,7 +3,7 @@
 # torch/nano-parakeet need cuDNN, not just the bare CUDA runtime.
 #
 # Build: docker build -t local-registry:5000/speech-stt:<tag> stt/
-FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
+FROM local-registry:5000/cuda:12.9.1-cudnn-runtime-ubuntu24.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip libsndfile1 \
