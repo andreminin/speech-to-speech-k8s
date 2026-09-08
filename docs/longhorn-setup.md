@@ -329,18 +329,16 @@ Cause: The volume has no schedulable replicas, typically because disks are missi
 
 Fix:
 
-    Verify disks are present and schedulable:
-    bash
-
-    kubectl describe nodes.longhorn.io node2 -n longhorn-system | grep -A 10 "Disk Status"
-
-    If disks are missing, ensure the label node.longhorn.io/create-default-disk=true is present and restart the managers:
-    bash
-
-    kubectl label node node2 node.longhorn.io/create-default-disk=true
-    kubectl delete pods -n longhorn-system -l app=longhorn-manager
-
-    If the volume is already faulted, delete the PVC and recreate it.
+Verify disks are present and schedulable:
+```bash
+kubectl describe nodes.longhorn.io node2 -n longhorn-system | grep -A 10 "Disk Status"
+```
+If disks are missing, ensure the label node.longhorn.io/create-default-disk=true is present and restart the managers:
+```bash
+kubectl label node node2 node.longhorn.io/create-default-disk=true
+kubectl delete pods -n longhorn-system -l app=longhorn-manager
+```
+If the volume is already faulted, delete the PVC and recreate it.
 
 ImagePullBackOff on Longhorn Pods
 
@@ -350,17 +348,15 @@ Cause: The image is missing from the local registry, or the repository path in t
 
 Fix:
 
-    Verify the image exists in the registry:
-    bash
-
-    curl -k https://local-registry:5000/v2/_catalog
-
-    Check the exact image tag the pod is trying to pull:
-    bash
-
-    kubectl describe pod <pod-name> -n longhorn-system | grep "Image:"
-
-    Ensure your longhorn-values.yaml uses the correct repository and tag. The repository should match how you tagged the image when pushing to the local registry.
+Verify the image exists in the registry:
+```bash
+curl -k https://local-registry:5000/v2/_catalog
+```
+Check the exact image tag the pod is trying to pull:
+```bash
+kubectl describe pod <pod-name> -n longhorn-system | grep "Image:"
+```
+Ensure your longhorn-values.yaml uses the correct repository and tag. The repository should match how you tagged the image when pushing to the local registry.
 
 Longhorn Manager Crashes with iscsiadm: No such file or directory
 
@@ -379,27 +375,23 @@ Cause: The underlying Longhorn volume is faulted and the finalizer cannot comple
 
 Fix:
 
-    Remove the finalizer from the PVC:
-    bash
-
-    kubectl patch pvc <pvc-name> -n speech -p '{"metadata":{"finalizers":null}}' --type=merge
-
-    Delete the PVC:
-    bash
-
-    kubectl delete pvc <pvc-name> -n speech --force --grace-period=0
-
-    Delete the underlying Longhorn volume:
-    bash
-
-    kubectl delete volumes.longhorn.io <volume-name> -n longhorn-system --force --grace-period=0
-
-    If it doesn't delete, patch it first:
-    bash
-
-    kubectl patch volumes.longhorn.io <volume-name> -n longhorn-system -p '{"metadata":{"finalizers":null}}' --type=merge
-    kubectl delete volumes.longhorn.io <volume-name> -n longhorn-system
-
+Remove the finalizer from the PVC:
+```bash
+kubectl patch pvc <pvc-name> -n speech -p '{"metadata":{"finalizers":null}}' --type=merge
+```
+Delete the PVC:
+```bash
+kubectl delete pvc <pvc-name> -n speech --force --grace-period=0
+```
+Delete the underlying Longhorn volume:
+```bash
+kubectl delete volumes.longhorn.io <volume-name> -n longhorn-system --force --grace-period=0
+```
+If it doesn't delete, patch it first:
+```bash
+kubectl patch volumes.longhorn.io <volume-name> -n longhorn-system -p '{"metadata":{"finalizers":null}}' --type=merge
+kubectl delete volumes.longhorn.io <volume-name> -n longhorn-system
+```
 Disk Not Becoming Ready on a Node
 
 Symptoms:
@@ -412,36 +404,33 @@ Cause: The disk path is missing, unwritable, or the partition is full.
 
 Fix:
 
-    SSH into the node and verify the directory:
-    bash
+SSH into the node and verify the directory:
+```bash
+sudo ls -la /mnt/longhorn
+sudo df -h /mnt/longhorn
+```
+If missing, create it:
+```bash
+sudo mkdir -p /mnt/longhorn
+sudo chown root:root /mnt/longhorn
+sudo chmod 755 /mnt/longhorn
+```
+If the partition is full, free up space or mount a larger disk to /mnt/longhorn.
 
-    sudo ls -la /mnt/longhorn
-    sudo df -h /mnt/longhorn
-
-    If missing, create it:
-    bash
-
-    sudo mkdir -p /mnt/longhorn
-    sudo chown root:root /mnt/longhorn
-    sudo chmod 755 /mnt/longhorn
-
-    If the partition is full, free up space or mount a larger disk to /mnt/longhorn.
-
-    Restart the Longhorn manager on the node:
-    bash
-
-    kubectl delete pod -n longhorn-system -l app=longhorn-manager --field-selector spec.nodeName=node3
-
+Restart the Longhorn manager on the node:
+```bash
+kubectl delete pod -n longhorn-system -l app=longhorn-manager --field-selector spec.nodeName=node3
+```
 Next Steps
 
 Once Longhorn is validated, proceed to:
 
-    Phase B – Deploy speech-llm with a Longhorn PVC for model storage
+Phase B – Deploy speech-llm with a Longhorn PVC for model storage
 
-    Phase C – Deploy speech-stt with a Longhorn PVC
+Phase C – Deploy speech-stt with a Longhorn PVC
 
-    Phase D – Deploy speech-tts with a Longhorn PVC
+Phase D – Deploy speech-tts with a Longhorn PVC
 
-    Phase E – Deploy the gateway and run the first end-to-end test
+Phase E – Deploy the gateway and run the first end-to-end test
 
 See the main deployment.md for the full deployment sequence.
