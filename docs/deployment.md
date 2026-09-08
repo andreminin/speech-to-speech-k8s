@@ -58,24 +58,49 @@ node.
    uses `k8s/stt/deployment-colocated-with-tts.yaml` instead of two separate
    Deployments.
 
-## Longhorn setup
-TODO add instructions for storage/longhorn* and local-* yaml
-Before deploying speech services, we should confirm Longhorn can actually provision and mount volumes.
-This is the final infrastructure validation.
 
-Create a test PVC in the speech namespace:
- 
-`kubectl apply -f k8s/storage/longhorn-test-pvc.yaml`
-`kubectl get pvc test-longhorn-pvc -n speech -w`
+---
 
-`
-NAME                STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
-test-longhorn-pvc   Bound    pvc-59190388-a7b3-41de-93dd-779c7f2f8fee   5Gi        RWO            longhorn       <unset>                 19s
-`
+## Update to `docs/deployment.md`
+
+Replace the existing "Longhorn setup TODO" section (lines 32–41 in the raw view) with:
+
+## Longhorn Setup
+
+Longhorn provides persistent block storage for model files and application data. Follow the dedicated setup guide:
+
+👉 **[Longhorn Setup Guide](./longhorn-setup.md)**
+
+This guide covers:
+
+- Prerequisites (`open-iscsi`, kernel modules, storage directory)
+- Helm installation with air-gapped registry overrides
+- Mirroring all required container images
+- Validating storage with a test PVC and pod
+- Common troubleshooting scenarios
+
+**Quick validation** – after completing the Longhorn setup, confirm storage works:
+
+```bash
+kubectl apply -f k8s/storage/longhorn-test-pvc.yaml
+kubectl get pvc test-longhorn-pvc -n speech -w
+
+# Wait for STATUS: Bound
+
+kubectl apply -f k8s/storage/longhorn-test-pod.yaml
+kubectl exec -it test-longhorn-pod -n speech -- touch /data/hello.txt
+# Should succeed without error
+
+kubectl delete pod test-longhorn-pod -n speech
+kubectl delete pvc test-longhorn-pvc -n speech
+```
 Once STATUS: Bound, deploy a test pod to verify mounting:
 
 `kubectl apply -f k8s/storage/longhorn-test-pod.yaml`
 `kubectl exec -it test-longhorn-pod -n speech -- touch /data/hello.txt`
+`kubectl exec -it test-longhorn-pod -n speech -- ls -la /data`
+
+Once validated, proceed to Phase B below.
 
 ## Phase B - `speech-llm` standalone
 
