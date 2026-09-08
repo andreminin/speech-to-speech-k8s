@@ -23,14 +23,20 @@ spec:
         - name: speech-stt
           image: local-registry:5000/speech-stt:latest
           imagePullPolicy: IfNotPresent
-          args:
-            - --stt
-            - whisper
-            - --stt_model_name
-            - /models
           env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: HF_TOKEN
+            - name: STT_MODEL_NAME
+              value: "nvidia/parakeet-tdt-0.6b-v3"
+            - name: STT_DEVICE
+              value: "cuda"
             - name: HF_HOME
-              value: /models
+              value: "/models"   # cache and model location
+            - name: TRANSFORMERS_CACHE
+              value: "/models"
           ports:
             - containerPort: 8080
           resources:
@@ -61,7 +67,7 @@ spec:
       volumes:
         - name: models
           hostPath:
-            path: /mnt/local-fast/whisper-model
+            path: /mnt/local-fast/parakeet-model
             type: Directory
 ---
 apiVersion: v1
