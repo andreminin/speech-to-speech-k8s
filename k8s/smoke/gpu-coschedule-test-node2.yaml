@@ -19,7 +19,8 @@ metadata:
 spec:
   restartPolicy: Never
   runtimeClassName: nvidia
-  nodeName: node2
+  nodeSelector:
+    kubernetes.io/hostname: node2
   imagePullSecrets:
     - name: local-registry-cred
   containers:
@@ -40,7 +41,8 @@ metadata:
 spec:
   restartPolicy: Never
   runtimeClassName: nvidia
-  nodeName: node2
+  nodeSelector:
+    kubernetes.io/hostname: node2
   imagePullSecrets:
     - name: local-registry-cred
   containers:

@@ -1,0 +1,12 @@
+network:
+  storageNetwork: "custom"
+  # This can be configured directly through the UI after installation or defined here
+defaultSettings:
+  createDefaultDiskLabeledNodes: true
+  defaultDataPath: "/mnt/longhorn"
+  # Enforce strict replication boundaries matching lowest physical size limit
+  storageOverProvisioningPercentage: 100
+  storageMinimalAvailablePercentage: 15
+ingress:
+  enabled: true
+  host: longhorn.local

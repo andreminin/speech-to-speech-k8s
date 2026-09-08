@@ -40,18 +40,47 @@ node.
 5. **GPU co-scheduling constraint** (see `docs/architecture.md`):
    ```bash
    kubectl apply -f k8s/smoke/gpu-coschedule-test-node2.yaml
-   kubectl get pods -n speech -l test=gpu-coschedule
+   kubectl get pods -n speech -l test=gpu-coschedule -o wide
    # expect: gpu-coschedule-a Running, gpu-coschedule-b Pending
+   # Look at the Events section. The key evidence should be a scheduler message containing:
+   # Insufficient nvidia.com/gpu
    kubectl delete -f k8s/smoke/gpu-coschedule-test-node2.yaml
    ```
+   Expected output from `get pods` - one node is Running, another is Pending:
+   ```
+    NAME               READY   STATUS    RESTARTS   AGE   IP              NODE     NOMINATED NODE   READINESS GATES
+    gpu-coschedule-a   1/1     Running   0          18s   172.16.104.44   node2    <none>           <none>
+    gpu-coschedule-b   0/1     Pending   0          18s   <none>          <none>   <none>           <none>
+    ```
+   If UnexpectedAdmissionError on -b pod, check status using
+   `kubectl describe pod -n speech gpu-coschedule-b`
    Record the result - it determines whether Option A (node2=STT+TTS) later
    uses `k8s/stt/deployment-colocated-with-tts.yaml` instead of two separate
    Deployments.
 
+## Longhorn setup
+TODO add instructions for storage/longhorn* and local-* yaml
+Before deploying speech services, we should confirm Longhorn can actually provision and mount volumes.
+This is the final infrastructure validation.
+
+Create a test PVC in the speech namespace:
+ 
+`kubectl apply -f k8s/storage/longhorn-test-pvc.yaml`
+`kubectl get pvc test-longhorn-pvc -n speech -w`
+
+`
+NAME                STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+test-longhorn-pvc   Bound    pvc-59190388-a7b3-41de-93dd-779c7f2f8fee   5Gi        RWO            longhorn       <unset>                 19s
+`
+Once STATUS: Bound, deploy a test pod to verify mounting:
+
+`kubectl apply -f k8s/storage/longhorn-test-pod.yaml`
+`kubectl exec -it test-longhorn-pod -n speech -- touch /data/hello.txt`
+
 ## Phase B - `speech-llm` standalone
 
 1. Set the real GGUF model repo in `k8s/configmaps/llm-config.yaml`
-   (`LLM_HF_REPO`), and the image tag in `k8s/llm/deployment.yaml` if you
+   (`LLM_HF_REPO`, "Qwen/Qwen3-8B-GGUF" by default), and the image tag in `k8s/llm/deployment.yaml` if you
    mirrored `llama.cpp:server-cuda` under a different tag.
 2. ```bash
    ./scripts/deploy.sh llm

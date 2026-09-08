@@ -7,6 +7,6 @@ metadata:
   name: llm-config
   namespace: speech
 data:
-  LLM_HF_REPO: "CHANGE_ME_org/model-GGUF-repo"
+  LLM_HF_REPO: "Qwen/Qwen3-8B-GGUF"
   LLM_CTX_SIZE: "65536"
   LLM_PARALLEL: "2"
