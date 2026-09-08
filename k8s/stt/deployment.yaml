@@ -7,6 +7,8 @@ metadata:
     app: speech-stt
 spec:
   replicas: 1
+  strategy:
+    type: Recreate   # single node GPU - a surge pod could never schedule anyway
   selector:
     matchLabels:
       app: speech-stt
@@ -37,8 +39,12 @@ spec:
               value: "/models"   # cache and model location
             - name: TRANSFORMERS_CACHE
               value: "/models"
+            - name: HF_HUB_OFFLINE
+              value: "1"
+            - name: TRANSFORMERS_OFFLINE
+              value: "1"
           ports:
-            - containerPort: 8080
+            - containerPort: 8001
           resources:
             requests:
               nvidia.com/gpu: 1
@@ -51,17 +57,21 @@ spec:
           volumeMounts:
             - name: models
               mountPath: /models
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8001
+            failureThreshold: 30
+            periodSeconds: 10
           readinessProbe:
             httpGet:
-              path: /health
-              port: 8080
-            initialDelaySeconds: 30
+              path: /healthz
+              port: 8001
             periodSeconds: 10
           livenessProbe:
             httpGet:
-              path: /health
-              port: 8080
-            initialDelaySeconds: 60
+              path: /healthz
+              port: 8001
             periodSeconds: 20
             failureThreshold: 3
       volumes:
@@ -69,17 +79,3 @@ spec:
           hostPath:
             path: /mnt/local-fast/parakeet-model
             type: Directory
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: speech-stt-service
-  namespace: speech
-spec:
-  selector:
-    app: speech-stt
-  ports:
-    - protocol: TCP
-      port: 8080
-      targetPort: 8080
-  type: ClusterIP

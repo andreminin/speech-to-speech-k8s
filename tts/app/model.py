@@ -28,6 +28,7 @@ import numpy as np
 logger = logging.getLogger("speech-tts")
 
 DEFAULT_MODEL_NAME = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
+DEFAULT_LANGUAGE = "English"
 NATIVE_SAMPLE_RATE = 24_000
 DEFAULT_CHUNK_SIZE = 512
 DEFAULT_MAX_NEW_TOKENS = 2048
@@ -66,7 +67,11 @@ class Qwen3TTS:
 
         with self._lock:
             for _ in self._model.generate_custom_voice_streaming(
-                "warm up", voice="aiden", chunk_size=DEFAULT_CHUNK_SIZE, max_new_tokens=64
+                "warm up",
+                speaker="aiden",
+                language=DEFAULT_LANGUAGE,
+                chunk_size=DEFAULT_CHUNK_SIZE,
+                max_new_tokens=64,
             ):
                 pass
         logger.info("model warm-up complete")
@@ -75,17 +80,18 @@ class Qwen3TTS:
     def is_loaded(self) -> bool:
         return self._model is not None
 
-    def synthesize_stream(self, text: str, voice: str) -> Iterator[bytes]:
+    def synthesize_stream(self, text: str, voice: str, language: str | None = None) -> Iterator[bytes]:
         if self._model is None:
             raise RuntimeError("model not loaded")
         with self._lock:
-            for chunk in self._model.generate_custom_voice_streaming(
+            for chunk, _sr, _timing in self._model.generate_custom_voice_streaming(
                 text,
-                voice=voice,
+                speaker=voice,
+                language=language or DEFAULT_LANGUAGE,
                 chunk_size=DEFAULT_CHUNK_SIZE,
                 max_new_tokens=DEFAULT_MAX_NEW_TOKENS,
             ):
                 yield _to_pcm16_bytes(chunk)
 
-    def synthesize(self, text: str, voice: str) -> bytes:
-        return b"".join(self.synthesize_stream(text, voice))
+    def synthesize(self, text: str, voice: str, language: str | None = None) -> bytes:
+        return b"".join(self.synthesize_stream(text, voice, language))

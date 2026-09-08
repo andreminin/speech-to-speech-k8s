@@ -85,7 +85,7 @@ async def synthesize(body: SpeechRequest, request: Request):
         total_bytes = 0
         if body.response_format == "wav":
             yield _wav_header(sample_rate=body.sample_rate)
-        for chunk in tts.synthesize_stream(body.input, body.voice):
+        for chunk in tts.synthesize_stream(body.input, body.voice, body.language):
             if first_chunk_at is None:
                 first_chunk_at = time.monotonic()
             total_bytes += len(chunk)

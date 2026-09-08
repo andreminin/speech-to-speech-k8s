@@ -7,6 +7,8 @@ metadata:
     app: speech-llm
 spec:
   replicas: 1
+  strategy:
+    type: Recreate   # single node GPU - a surge pod could never schedule anyway
   selector:
     matchLabels:
       app: speech-llm

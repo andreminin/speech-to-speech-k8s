@@ -59,12 +59,6 @@ node.
    Deployments.
 
 
----
-
-## Update to `docs/deployment.md`
-
-Replace the existing "Longhorn setup TODO" section (lines 32–41 in the raw view) with:
-
 ## Longhorn Setup
 
 Longhorn provides persistent block storage for model files and application data. Follow the dedicated setup guide:
@@ -165,12 +159,32 @@ kubectl run curl-test --namespace=speech --image=local-registry:5000/cuda:12.9.1
 
 ## Phase C - `speech-stt` standalone
 
-1. Build and push:
+1. On the node that will run STT (`node3` in this guide), pre-download the
+   Parakeet `.nemo` checkpoint into the hostPath mount so the pod never has
+   to hit the network at startup:
+   ```bash
+   # On node3 (or a machine with internet access, then scp the file to node3)
+   mkdir -p /mnt/local-fast/parakeet-model
+   HF_HOME=/mnt/local-fast/parakeet-model hf download nvidia/parakeet-tdt-0.6b-v3 \
+     --include "*.nemo"
+   chmod -R a+rX /mnt/local-fast/parakeet-model
+   ```
+   `nano-parakeet` resolves the file via `hf_hub_download`, which only looks
+   inside the standard HF cache layout under `$HF_HOME` (i.e.
+   `hub/models--nvidia--parakeet-tdt-0.6b-v3/snapshots/<rev>/...`) - a flat
+   copy of the file dropped elsewhere in the mount won't be found. The
+   Deployment also sets `HF_HUB_OFFLINE=1`/`TRANSFORMERS_OFFLINE=1`, so once
+   the cache is populated this way the pod will never attempt a network
+   call, even to revalidate - without that env var, `hf_hub_download` still
+   reaches out to the Hub on every start even when the cache is warm, which
+   can hang the pod (and get it killed as unhealthy) if the cluster has no
+   route to huggingface.co.
+2. Build and push:
    ```bash
    ./scripts/build-and-push.sh <tag>
    ```
    (update `image:` in `k8s/stt/deployment.yaml` to match `<tag>` if not `latest`)
-2. ```bash
+3. ```bash
    ./scripts/deploy.sh stt
     kubectl -n speech rollout status deployment/speech-stt
     ./scripts/smoke-test.sh stt /path/to/16khz-mono-sample.wav
