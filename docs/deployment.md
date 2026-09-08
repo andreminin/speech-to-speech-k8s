@@ -19,9 +19,8 @@ node.
    ```bash
    ./scripts/create-registry-secret.sh
    ```
-2. **CUDA base image availability**: confirm `local-registry:5000` has a
-   `cudnn-runtime`-flavored CUDA 12.8.x tag (not just a bare `-base` tag -
-   torch/cuDNN need it). Mirror one if missing:
+2. **CUDA base image availability**: confirm `local-registry:5000` has a `base` and
+   `cudnn-runtime`-flavored CUDA 12.9.x tag. Mirror images if missing:
    ```bash
    ./scripts/mirror-images.sh local-registry:5000
    ```
