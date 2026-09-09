@@ -1,14 +1,21 @@
 # ALTERNATIVE to k8s/stt/deployment.yaml + k8s/tts/deployment.yaml, for use
-# ONLY if the Phase A smoke test (k8s/smoke/) confirms that two separate
-# Deployments each requesting nvidia.com/gpu: 1 cannot both schedule onto
-# node2's single GPU (the expected outcome under default, non-MIG,
-# non-time-sliced device-plugin behavior — see docs/architecture.md).
+# ONLY if two separate Deployments each requesting nvidia.com/gpu: 1 cannot
+# both schedule onto one node's single GPU (confirmed directly: node3 gave
+# `UnexpectedAdmissionError ... Available: 0` when both speech-stt and
+# speech-tts were scaled up at once — see docs/deployment.md "Status").
 #
-# In that case, Option A (node2 = STT+TTS) must be a single Pod with two
-# containers sharing the one GPU device the Pod requests, not two
-# independent Deployments. Apply this INSTEAD OF k8s/stt/deployment.yaml and
-# k8s/tts/deployment.yaml when Option A wins the Phase D benchmark; keep
-# k8s/llm/deployment.yaml (node3) as-is either way.
+# In that case, STT+TTS must be a single Pod with two containers sharing the
+# one GPU device the Pod requests, not two independent Deployments. Apply
+# this INSTEAD OF k8s/stt/deployment.yaml and k8s/tts/deployment.yaml.
+#
+# Retargeted at node3 (2026-09-09): node2 is currently running speech-llm,
+# and node3 is where speech-stt/speech-tts's model caches already live
+# (/mnt/local-fast/{parakeet-model,tts-model}), so this uses the same
+# hostPath mounts and env vars as the working standalone Deployments instead
+# of the stale models-node2 PVC / stt-config/tts-config ConfigMaps (those
+# still reference TTS_BACKEND=ggml and HF_HUB_OFFLINE=0, neither of which
+# matches the working torch-backend/offline setup — refresh them before
+# switching this manifest back to envFrom).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -18,6 +25,8 @@ metadata:
     app: speech-stt-tts
 spec:
   replicas: 1
+  strategy:
+    type: Recreate   # single node GPU - a surge pod could never schedule anyway
   selector:
     matchLabels:
       app: speech-stt-tts
@@ -27,16 +36,31 @@ spec:
         app: speech-stt-tts
     spec:
       runtimeClassName: nvidia
-      nodeName: node2
+      nodeName: node3
       imagePullSecrets:
         - name: local-registry-cred
       containers:
         - name: speech-stt
           image: local-registry:5000/speech-stt:latest
           imagePullPolicy: IfNotPresent
-          envFrom:
-            - configMapRef:
-                name: stt-config
+          env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: HF_TOKEN
+            - name: STT_MODEL_NAME
+              value: "nvidia/parakeet-tdt-0.6b-v3"
+            - name: STT_DEVICE
+              value: "cuda"
+            - name: HF_HOME
+              value: "/models"
+            - name: TRANSFORMERS_CACHE
+              value: "/models"
+            - name: HF_HUB_OFFLINE
+              value: "1"
+            - name: TRANSFORMERS_OFFLINE
+              value: "1"
           ports:
             - containerPort: 8001
           resources:
@@ -54,19 +78,35 @@ spec:
               cpu: "4"
               memory: 8Gi
           volumeMounts:
-            - name: models
-              mountPath: /mnt/models/parakeet
-              subPath: parakeet
+            - name: stt-models
+              mountPath: /models
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8001
+            failureThreshold: 30
+            periodSeconds: 10
           readinessProbe:
             httpGet: { path: /healthz, port: 8001 }
-            initialDelaySeconds: 30
             periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8001 }
+            periodSeconds: 20
+            failureThreshold: 3
         - name: speech-tts
-          image: local-registry:5000/speech-tts:latest
+          image: local-registry:5000/speech-tts:voicefix3
           imagePullPolicy: IfNotPresent
-          envFrom:
-            - configMapRef:
-                name: tts-config
+          env:
+            - name: TTS_MODEL_NAME
+              value: "/models"
+            - name: TTS_DEVICE
+              value: "cuda"
+            - name: TTS_BACKEND
+              value: "torch"
+            - name: HF_HUB_OFFLINE
+              value: "1"
+            - name: TRANSFORMERS_OFFLINE
+              value: "1"
           ports:
             - containerPort: 8002
           resources:
@@ -74,9 +114,8 @@ spec:
             # grant from the speech-stt container above. If your device
             # plugin instead requires every container that touches the GPU
             # to declare its own request, this manifest will need MIG/
-            # time-slicing configuration, which is out of scope for this
-            # milestone — fall back to running STT and TTS as two fully
-            # separate pipeline runs (not concurrently) instead.
+            # time-slicing configuration — see the "Next plan" section in
+            # docs/deployment.md.
             requests:
               cpu: "2"
               memory: 4Gi
@@ -84,17 +123,32 @@ spec:
               cpu: "4"
               memory: 8Gi
           volumeMounts:
-            - name: models
-              mountPath: /mnt/models/qwen3-tts
-              subPath: qwen3-tts
+            - name: tts-models
+              mountPath: /models
+          # TTS warmup (Triton JIT-compile + CUDA graph capture) took ~6
+          # minutes in standalone testing — generous failureThreshold here.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8002
+            failureThreshold: 60
+            periodSeconds: 10
           readinessProbe:
             httpGet: { path: /healthz, port: 8002 }
-            initialDelaySeconds: 30
             periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8002 }
+            periodSeconds: 20
+            failureThreshold: 3
       volumes:
-        - name: models
-          persistentVolumeClaim:
-            claimName: models-node2
+        - name: stt-models
+          hostPath:
+            path: /mnt/local-fast/parakeet-model
+            type: Directory
+        - name: tts-models
+          hostPath:
+            path: /mnt/local-fast/tts-model
+            type: Directory
 ---
 apiVersion: v1
 kind: Service

@@ -1,6 +1,6 @@
 # speech-to-speech-k8s
 
-Distributed deployment of Hugging Face's [`speech-to-speech`](https://github.com/huggingface/speech-to-speech) pipeline across a small home-lab Kubernetes cluster.
+Distributed deployment of Hugging Face's [`speech-to-speech`](https://github.com/huggingface/speech-to-speech) pipeline across a small home-lab Kubernetes cluster with local Docker registry imitating no-air on-prem cluster setup.
 
 The project is intentionally a **sandbox / playground for distributed AI inference experiments**. It is not intended to be a production-ready speech platform. The goal is to use the hardware that is already available, learn where the practical boundaries are, and experiment with splitting an AI pipeline across heterogeneous GPU nodes.
 
@@ -72,23 +72,23 @@ The current architecture is an HTTP-first distributed pipeline:
 ```text
                          Kubernetes
 
-  ┌─────────────────────────────────────────────────────────┐
-  │                                                         │
-  │  node1                    node2              node3      │
-  │  4 GB GPU                 16 GB GPU           16 GB GPU │
-  │                                                         │
-  │  ┌──────────────┐       ┌──────────────┐  ┌───────────┐ │
-  │  │    Gateway   │──────►│     STT      │  │    LLM    │ │
-  │  │              │       │ Parakeet-TDT │  │ llama.cpp │ │
-  │  └──────┬───────┘       └──────┬───────┘  └─────┬─────┘ │
+  ┌──────────────────────────────────────────────────────────┐
+  │                                                          │
+  │  node1                    node2              node3       │
+  │  4 GB GPU                 16 GB GPU           16 GB GPU  │
+  │                                                          │
+  │  ┌──────────────┐       ┌──────────────┐  ┌───────────┐  │
+  │  │    Gateway   │──────►│     STT      │  │    LLM    │  │
+  │  │              │       │ Parakeet-TDT │  │ llama.cpp │  │
+  │  └──────┬───────┘       └──────┬───────┘  └─────┬─────┘  │
   │         │                      │                 │       │
   │         │                      └──── transcript ─┘       │
   │         │                                                │
   │         └──────────────────────────────────────────────► │
-  │                                  TTS                    │
-  │                            Qwen3-TTS                    │
-  │                                                         │
-  └─────────────────────────────────────────────────────────┘
+  │                                  TTS                     │
+  │                            Qwen3-TTS                     │
+  │                                                          │
+  └──────────────────────────────────────────────────────────┘
 ```
 
 The exact TTS placement is intentionally experimental:
@@ -107,7 +107,7 @@ Kubernetes GPU scheduling treats a GPU as a device resource (`nvidia.com/gpu: 1`
 
 See [`docs/architecture.md`](docs/architecture.md) for the current as-built design and [`docs/proposal.md`](docs/proposal.md) for the original design rationale.
 
-**Current placement, not a resolved Option A/B choice**: `speech-stt` and `speech-tts` are both pinned to `node3` right now and run one at a time - `node3`'s single GPU can't satisfy two separate `nvidia.com/gpu: 1` requests at once. See [Status and Next plan](docs/deployment.md#status-2026-09-09) in the deployment guide for what's verified and the plan for letting STT and TTS coexist on one GPU.
+**Current placement is the mirror image of "Option A", not a resolved choice**: `speech-llm` is pinned to `node2` (since Phase B) and `speech-stt` + `speech-tts` are colocated in one Pod on `node3` (`k8s/stt/deployment-colocated-with-tts.yaml`) - `node3`'s single GPU can't satisfy two separate `nvidia.com/gpu: 1` requests, so STT and TTS share it as two containers in one Pod instead of two Deployments. Confirmed working with both smoke-tested concurrently; combined VRAM 6.8GB of 16GB. The "Option B" shape (LLM+TTS colocated) hasn't been benchmarked. See [Status](docs/deployment.md#status-2026-09-09) in the deployment guide and the results in [`docs/benchmarks.md`](docs/benchmarks.md).
 
 ## Current implementation
 
@@ -349,16 +349,19 @@ The cluster itself is part of the experiment.
 
 ### Verified so far
 
-- `speech-stt` and `speech-tts` each individually confirmed `Running`/`Ready`
-  and smoke-tested on `node3` (one at a time - see the placement note
-  above).
-- `speech-llm` not yet exercised in this pass; currently scaled to 0.
-- Not yet done: running STT and TTS concurrently, and the full gateway
-  end-to-end round trip (Phase E).
+- `speech-llm` confirmed `Running`/`Ready` and smoke-tested on `node2`
+  (`/health` OK, chat completion returned real output). VRAM: 8.7GB/16GB.
+- `speech-stt` and `speech-tts` colocated in one Pod on `node3`
+  (`k8s/stt/deployment-colocated-with-tts.yaml`), confirmed `2/2 Running`,
+  and smoke-tested **concurrently** - both succeeded at the same time on
+  the shared GPU. Combined VRAM: 6.8GB/16GB, comfortable headroom.
+- Not yet done: the LLM+TTS colocation alternative ("Option B" shape),
+  latency/TTFA measurements, and the full gateway end-to-end round trip
+  (Phase E).
 
 See [`docs/deployment.md`](docs/deployment.md#status-2026-09-09) for the
-detailed status and [the cooperative-GPU-sharing next plan](docs/deployment.md#next-plan---cooperative-gpu-sharing-for-stt--tts)
-for how STT + TTS coexisting on one GPU is expected to be tackled next.
+detailed status and [`docs/benchmarks.md`](docs/benchmarks.md) for the
+recorded VRAM numbers.
 
 ## Future actions
 
