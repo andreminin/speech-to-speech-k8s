@@ -1,0 +1,77 @@
+# Browser voice-chat UI - upstream huggingface/speech-to-speech's own
+# `demo/` app, unmodified (same "thin wrapper around upstream" convention as
+# gateway/Dockerfile). No Dockerfile of ours needed: demo/ ships its own,
+# built directly from the upstream checkout:
+#   docker build -t local-registry:5000/speech-demo:<tag> /path/to/speech-to-speech-checkout/demo
+#
+# SPEECH_TO_SPEECH_URL must be the Ingress's externally-reachable wss://
+# address, NOT a cluster-internal Service DNS name and NOT the plain
+# ws://<node-ip>:30765 gateway NodePort - the browser dials this URL
+# directly (client-side), and once this page is https:// a plain ws://
+# target is blocked as mixed content. See k8s/traefik/ingress.yaml.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: speech-demo
+  namespace: speech
+  labels:
+    app: speech-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: speech-demo
+  template:
+    metadata:
+      labels:
+        app: speech-demo
+    spec:
+      nodeName: node1   # CPU-only, same rationale as speech-gateway
+      imagePullSecrets:
+        - name: local-registry-cred
+      containers:
+        - name: speech-demo
+          image: local-registry:5000/speech-demo:debug2
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: SPEECH_TO_SPEECH_URL
+              value: "wss://192.168.10.31:30443/v1/realtime"
+            # Disabled so the first response is always an answer to what was
+            # actually said, not upstream's default auto-greeting - makes
+            # testing unambiguous. Remove this to restore the greeting.
+            - name: STARTUP_GREETING
+              value: ""
+          ports:
+            - containerPort: 7860
+          resources:
+            requests:
+              cpu: "250m"
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 7860
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 7860
+            initialDelaySeconds: 15
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: speech-demo
+  namespace: speech
+spec:
+  type: ClusterIP
+  selector:
+    app: speech-demo
+  ports:
+    - port: 7860
+      targetPort: 7860

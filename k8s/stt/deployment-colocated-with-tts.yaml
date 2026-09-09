@@ -94,7 +94,7 @@ spec:
             periodSeconds: 20
             failureThreshold: 3
         - name: speech-tts
-          image: local-registry:5000/speech-tts:voicefix3
+          image: local-registry:5000/speech-tts:voicefix4
           imagePullPolicy: IfNotPresent
           env:
             - name: TTS_MODEL_NAME

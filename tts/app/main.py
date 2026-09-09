@@ -74,8 +74,18 @@ async def voices():
 
 @app.post("/v1/audio/speech")
 async def synthesize(body: SpeechRequest, request: Request):
-    if body.voice not in AVAILABLE_VOICES:
-        raise HTTPException(status_code=400, detail=f"unknown voice '{body.voice}'")
+    # The gateway's realtime session lets the client (the browser SDK)
+    # override the voice per-turn (see openai_compatible_handler.py's
+    # _resolve_voice) - it defaults to a standard OpenAI voice name (e.g.
+    # "alloy") unrelated to whatever this server actually has loaded. This
+    # deployment only ever has one real voice available, so silently fall
+    # back to it instead of 400ing every turn that doesn't happen to name
+    # it explicitly - matches what a single-voice TTS model can actually do.
+    voice = body.voice if body.voice in AVAILABLE_VOICES else AVAILABLE_VOICES[0]
+    if voice != body.voice:
+        logger.info(
+            json.dumps({"component": "tts", "event": "voice_fallback", "requested": body.voice, "used": voice})
+        )
 
     request_id = request.headers.get("X-Speech-Request-Id", str(uuid.uuid4()))
     start = time.monotonic()
@@ -85,7 +95,7 @@ async def synthesize(body: SpeechRequest, request: Request):
         total_bytes = 0
         if body.response_format == "wav":
             yield _wav_header(sample_rate=body.sample_rate)
-        for chunk in tts.synthesize_stream(body.input, body.voice, body.language):
+        for chunk in tts.synthesize_stream(body.input, voice, body.language):
             if first_chunk_at is None:
                 first_chunk_at = time.monotonic()
             total_bytes += len(chunk)

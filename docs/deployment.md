@@ -58,8 +58,12 @@ All components deployed and individually verified:
   scripted WebSocket client against the same session receives real
   `response.output_audio.delta` events with substantial PCM16 payloads, so
   the gateway→TTS pipeline genuinely produces and sends audio; this is a
-  browser-client-side issue. See "Next: voice output in the browser" below
-  for the diagnosis so far and the concrete next debugging steps.
+  browser-client-side issue (the SDK's `_onAudio` callback simply never
+  fires). **Debugging session paused mid-investigation** - see "Next: voice
+  output in the browser (open issue - suspended mid-debug)" below for the
+  full diagnosis, what's still deployed (`speech-demo:debug2`, with
+  temporary debug logging), and the next concrete step to try when
+  resuming.
 
 Standalone `speech-stt`/`speech-tts` Deployments+Services
 (`k8s/stt/deployment.yaml`, `k8s/tts/deployment.yaml`) are **not applied** -
@@ -475,7 +479,116 @@ Steps:
 7. Manual verification (needs a human with a mic on the LAN - not
    scriptable): open `https://<node-ip>:30443/`, accept the self-signed
    cert warning once per device, click the orb, speak, confirm the transcript
-   + LLM reply + synthesized audio all round-trip.
+   + LLM reply + synthesized audio all round-trip. **Done for mic input and
+   text; audio playback still open - see next section.**
+
+## Next: voice output in the browser (open issue - suspended mid-debug)
+
+**Session paused here on 2026-09-09 - resume by reading this section before
+continuing.** Mic input works, text/transcript output works reliably, but
+synthesized speech is still not heard even on a clean, uninterrupted turn.
+
+### Found and fixed along the way (real bugs, keep these)
+
+- **TTS voice-name case mismatch (real bug, fixed)**: `tts/app/main.py` used
+  to hard-reject any `voice` not exactly matching `AVAILABLE_VOICES`
+  (`["aiden"]`) with HTTP 400. The gateway's realtime session lets the
+  client (the browser SDK) override the voice per-turn
+  (`openai_compatible_handler.py`'s `_resolve_voice`), and the real browser
+  session sent `"Aiden"` (capitalized) - a **case mismatch**, not a
+  different voice - causing every real TTS call from the gateway to fail
+  with 400 (confirmed directly in `speech-tts` logs:
+  `POST /v1/audio/speech HTTP/1.1" 400 Bad Request`, repeated). Fixed by
+  falling back to the configured default voice on any unrecognized name
+  instead of rejecting (`tts/app/main.py`, logs a `voice_fallback` line
+  when it happens). Rebuilt/pushed as
+  `local-registry:5000/speech-tts:voicefix4`;
+  `k8s/stt/deployment-colocated-with-tts.yaml` now points at that tag.
+  **Confirmed fixed**: TTS calls now return 200 OK and real audio bytes
+  flow (verified both via a scripted client and live gateway logs showing
+  `audio=210.38s` of cumulative synthesized audio across a real browser
+  session).
+- Despite that fix, **audio is still not heard in the browser** on a clean
+  turn (confirmed by the user: "No audio, but text worked"). This is a
+  second, separate bug - browser-side, not backend.
+
+### Diagnosis of the still-open browser-side silence
+
+Tracing the browser-side code in the upstream checkout's `demo/` (not
+vendored into this repo, except `demo/Dockerfile`):
+
+- `demo/s2s-realtime-client.js` subscribes to the pinned
+  `@openai/agents-realtime` SDK's **session-level** `"audio"` event
+  (`this._session.on("audio", ...)`) - the wire-event → `"audio"`-callback
+  translation happens inside the vendored, minified SDK bundle
+  (`demo/vendor/openai-realtime-agents.umd.js`), not in readable source.
+- `_onAudio` is a silent no-op unless `transport === "websocket"` **and**
+  `this._playbackNode` exists. Since mic capture works (same
+  `_setupAudio()` gate creates both worklets together), that rules out the
+  transport/setup-never-ran branches.
+- **Confirmed via temporary instrumentation** (a `console.log` added at
+  the top of `_onAudio`, deployed as `local-registry:5000/speech-demo:debug2`
+  - see below): the log **never appears**, even on a clean turn with no
+  errors and confirmed text output. So `_onAudio` itself is never being
+  invoked by the SDK for `response.output_audio.delta` events, even though
+  those events are proven to arrive over the wire with real payloads (a
+  raw scripted `websockets` client sees them fine - this is purely about
+  what the SDK's internal parser does with them).
+- Two confounding side-issues surfaced during testing, now understood and
+  **not** the main bug:
+  - The gateway's realtime server supports exactly **one session at a
+    time** (`pool size 1`, a single long-lived pipeline reused across
+    reconnects, not per-connection). My own scripted diagnostic
+    connections were colliding with the user's live browser session
+    (`1008 policy violation: All session slots are in use`, and at least
+    one observed mid-session disconnect) - don't run test scripts while a
+    real browser session might be active.
+  - A Firefox console capture showed a *stale cached* build (still
+    referencing the old `audio-24k-v1` asset version, not the current
+    `debug2`) failing to load the vendor SDK bundle - that's Firefox's own
+    cache being sticky, unrelated to server behavior (the file serves
+    fine directly: `curl` gets `HTTP 200`, correct `text/javascript`
+    type, 4.8MB). Needs a hard-refresh in Firefox specifically if picked
+    up again; not investigated further since Chrome (current code) shows
+    a cleaner, different symptom.
+
+### Current deployed state (debug instrumentation still live)
+
+- `k8s/demo/deployment.yaml` currently points at
+  `local-registry:5000/speech-demo:debug2` - **not** the clean `v1` tag.
+  This image has two harmless temporary `console.log` lines (module-load
+  confirmation + `_onAudio` entry logging) patched into a local copy of
+  `demo/s2s-realtime-client.js` inside the checkout at
+  `/home/aminin/workspace/huggingface/speech-to-speech/demo/` (that local
+  checkout, not this repo, currently has the patch + a bumped cache-bust
+  version string `debug2` in `index.html`/`main.js`/`s2s-realtime-client.js`
+  - a backup of the original is at `s2s-realtime-client.js.orig` in that
+  checkout). None of this is committed anywhere - it's local, throwaway
+  debugging state.
+- To resume: keep testing against `debug2`, or roll back to `v1`
+  (`kubectl -n speech set image deployment/speech-demo speech-demo=local-registry:5000/speech-demo:v1`)
+  if you want a clean, unstinstrumented demo in the meantime.
+
+### Next debugging step when resuming
+
+Since `_onAudio` itself never fires, the next-most-direct check is one
+level up: `s2s-realtime-client.js` also has a raw catch-all
+`this._transport.on("*", ...)` handler (around line 202) that already
+handles some raw wire events (transcripts/status). Add logging there to
+print **every** event type the transport actually delivers to the browser,
+which will show definitively whether `response.output_audio.delta` reaches
+the transport layer at all (as opposed to being recognized-but-not-routed
+by the higher-level session object) - that's the one thing not yet
+directly observed in-browser. Depending on what that shows:
+- If `response.output_audio.delta` never appears at the transport's
+  catch-all either → something is dropping it between the WebSocket and
+  the transport's own event dispatch (a real SDK bug or version mismatch
+  worth reporting/patching).
+- If it does appear there but `_onAudio` still never fires → the
+  session-level object (built on top of the transport) isn't wiring
+  `"audio"` correctly for this transport/session shape, which would want
+  a closer look at whatever session-config negotiation
+  (`session.update`) happens right after `session.created`.
 
 ## Phase F - Probes/resources/observability
 

@@ -1,0 +1,46 @@
+# Single Ingress, one TLS cert, two paths - because once speech-demo is
+# served over https://, browsers block a plain ws:// connection dialed from
+# that page as mixed active content. The gateway's WebSocket therefore has
+# to be reachable as wss:// through this SAME Ingress/cert, not just the
+# demo's static page - see docs/architecture.md.
+#
+# rules[].host is deliberately omitted - clients connect by raw node IP,
+# not a hostname, so routing must match any Host header. tls.hosts below is
+# just a domain hint for the cert store, not a routing requirement; verified
+# working over plain IP + no SNI (see k8s/traefik/deployment.yaml's
+# `--entrypoints.websecure.http.tls=true` comment for the other half of
+# what actually makes this route instead of 404).
+#
+# speech-demo-tls (self-signed, SANs for all 4 node IPs) created manually:
+#   openssl req -x509 -nodes -newkey rsa:2048 -days 825 \
+#     -keyout tls.key -out tls.crt -subj "/CN=speech-demo.local" \
+#     -addext "subjectAltName=IP:192.168.10.30,IP:192.168.10.31,IP:192.168.10.32,IP:192.168.10.33,DNS:speech-demo.local"
+#   kubectl -n speech create secret tls speech-demo-tls --cert=tls.crt --key=tls.key
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: speech-demo
+  namespace: speech
+spec:
+  ingressClassName: traefik
+  tls:
+    - secretName: speech-demo-tls
+      hosts:
+        - speech-demo.local
+  rules:
+    - http:
+        paths:
+          - path: /v1/realtime
+            pathType: Prefix
+            backend:
+              service:
+                name: speech-gateway
+                port:
+                  number: 8765
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: speech-demo
+                port:
+                  number: 7860
