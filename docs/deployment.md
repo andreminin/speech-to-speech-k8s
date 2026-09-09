@@ -3,54 +3,72 @@
 Do these in order. Each step's exit criteria must pass before moving on -
 see the corresponding phase in the plan for the full rationale.
 
+## Prerequisite: upstream checkout
+
+`speech-gateway` and `speech-demo` (Phase E) build directly from a checkout
+of `huggingface/speech-to-speech` rather than vendoring its code - only a
+handful of files that need a local patch are vendored (`gateway/Dockerfile`,
+`demo/Dockerfile`). `scripts/build-and-push.sh` defaults to
+`../../huggingface/speech-to-speech`, resolved relative to wherever you run
+it from - so clone it as a **sibling of this repo's parent directory**, e.g.
+if this repo is at `~/workspace/andreminin/speech-to-speech-k8s`:
+
+```bash
+git clone https://github.com/huggingface/speech-to-speech ~/workspace/huggingface/speech-to-speech
+```
+
+Pass a different path as `build-and-push.sh`'s second argument if your
+layout differs.
+
 ## Status (2026-09-09)
 
-- `node2` had a physical outage (kubelet stopped posting status, host
-  unreachable to ping) and has since recovered - `kubectl get nodes` shows
-  `Ready`, no leftover taints.
-- `speech-tts` failed to start against the previously-built image
-  (`voicefix1`): the `cudnn-runtime` base image has no C compiler, and
-  `qwen_tts`'s rotary-embedding path JIT-compiles a Triton kernel at first
-  inference, which needs one. Fixed in `tts/Dockerfile` by adding
-  `build-essential`, `python3-dev` (Triton also needs `Python.h`), and `sox`
-  (the `faster-qwen3-tts` package shells out to the `sox` binary). Rebuilt
-  and pushed as `local-registry:5000/speech-tts:voicefix3`; `k8s/tts/deployment.yaml`
-  now points at that tag.
-- `scripts/smoke-test.sh`'s `pf()` helper backgrounded `kubectl port-forward`
-  without redirecting its output, so it inherited the pipe backing
-  `pid=$(pf ...)` and blocked the whole script forever (the port-forward
-  process is long-running and never closes that pipe, so the command
-  substitution never sees EOF). Fixed by redirecting the backgrounded
-  process's stdout/stderr to `/dev/null`.
-- Verified individually on `node3`, one at a time (see "GPU scheduling
-  constraint" in `docs/architecture.md` - two separate Deployments each
-  requesting `nvidia.com/gpu: 1` can't co-schedule on one physical GPU):
-  - `speech-tts`: `./scripts/smoke-test.sh tts "hello from the home lab" /tmp/out.wav` → valid WAV returned.
-  - `speech-stt`: `./scripts/smoke-test.sh stt wav/16000/test01_20s.wav` → correct transcript returned.
-- `speech-llm` validated on `node2` (which is where it's always been pinned,
-  since Phase B): `./scripts/smoke-test.sh llm` → `/health` OK and a real
-  chat completion returned. VRAM: 8731 MiB / 16380 MiB.
-- **STT+TTS colocation on `node3` tested and confirmed working** - see
-  "Next plan" below (now done, kept for the rationale/manifest details).
-  Both processes share `node3`'s one GPU concurrently via
-  `k8s/stt/deployment-colocated-with-tts.yaml` (retargeted from `node2` to
-  `node3`); STT and TTS smoke-tested **at the same time** and both
-  succeeded. Combined VRAM: 6772 MiB / 16311 MiB - comfortable headroom.
-  Recorded in `docs/benchmarks.md`.
-- Current cluster layout: `node2 = speech-llm` alone, `node3 = speech-stt +
-  speech-tts` colocated in one Pod (`speech-stt-tts`). This is the mirror
-  image of the documented "Option A" (`docs/architecture.md` names it
-  `node2 = STT+TTS, node3 = LLM`) - node labels swapped from what was
-  written, because `speech-llm` has been pinned to `node2` since Phase B
-  while `node2`'s outage separately forced STT+TTS onto `node3`. Not yet
-  updated to relabel as a new named option; the LLM+TTS alternative
-  ("Option B" shape) hasn't been benchmarked.
-- Standalone `speech-stt`/`speech-tts` Deployments+Services were deleted in
-  favor of the colocated `speech-stt-tts` Deployment (the colocated
-  manifest's Services reuse the `speech-stt`/`speech-tts` names, so
-  clients don't need to change anything). Restore the standalone manifests
-  (`k8s/stt/deployment.yaml`, `k8s/tts/deployment.yaml`) if colocation needs
-  to be abandoned.
+Current cluster layout: `node2 = speech-llm`, `node3 = speech-stt +
+speech-tts` colocated in one Pod (`speech-stt-tts`), `node1 = speech-gateway
++ speech-demo` (+ Traefik, unpinned). This is the mirror image of the
+documented "Option A" (`docs/architecture.md` names it `node2 = STT+TTS,
+node3 = LLM`) - not a deliberately chosen option, just where things ended
+up (node2 was briefly unavailable early on and speech-llm has been pinned
+to node2 since Phase B; the two constraints together produced this layout).
+The "Option B" shape (LLM+TTS colocated) hasn't been benchmarked.
+
+All components deployed and individually verified:
+
+- `speech-llm` (node2): `./scripts/smoke-test.sh llm` OK. VRAM 8731/16380 MiB.
+- `speech-stt` + `speech-tts` (node3, colocated via
+  `k8s/stt/deployment-colocated-with-tts.yaml` - two containers, one GPU
+  request, since node3's single GPU can't satisfy two separate Deployments
+  each requesting `nvidia.com/gpu: 1`): smoke-tested **concurrently**, both
+  succeeded. Combined VRAM 6772/16311 MiB - comfortable headroom. Recorded
+  in `docs/benchmarks.md`.
+- `speech-gateway` (node1): `./scripts/smoke-test.sh gateway` OK - a real
+  text-turn round trip through STT → LLM → TTS via the OpenAI Realtime
+  protocol.
+- `speech-demo` (node1) + Traefik (TLS, self-signed cert): deployed,
+  `1/1 Running`. Full manual browser verification done (Phase E.2 step 7) -
+  a real human, over the LAN, spoke into the mic and got a real answer back
+  as text. One early false alarm along the way: the first reply looked like
+  it ignored the question ("Hi there, what can I help you with today?") -
+  that's the demo's own `STARTUP_GREETING` firing automatically on session
+  open (a fixed prompt, unrelated to anything the user says), not a pipeline
+  bug. Disabled it (`STARTUP_GREETING: ""` in `k8s/demo/deployment.yaml`) so
+  the first reply is always an actual answer.
+  **Open issue**: mic input and text output both confirmed working (the
+  user's speech is transcribed and answered correctly), but synthesized
+  **audio is not heard** in the browser. Backend proven innocent - a raw
+  scripted WebSocket client against the same session receives real
+  `response.output_audio.delta` events with substantial PCM16 payloads, so
+  the gateway→TTS pipeline genuinely produces and sends audio; this is a
+  browser-client-side issue. See "Next: voice output in the browser" below
+  for the diagnosis so far and the concrete next debugging steps.
+
+Standalone `speech-stt`/`speech-tts` Deployments+Services
+(`k8s/stt/deployment.yaml`, `k8s/tts/deployment.yaml`) are **not applied** -
+replaced by the colocated `speech-stt-tts` Deployment, whose Services reuse
+the same names so nothing else had to change. Restore the standalone
+manifests if colocation ever needs to be abandoned.
+
+Not yet done: the LLM+TTS co-location benchmark, latency/TTFA
+measurements, and the manual end-to-end browser voice test.
 
 ## Phase A0 - Cluster health
 
@@ -312,27 +330,152 @@ let them coexist, roughly in order of how much they change:
 
 ## Phase E - Gateway + first end-to-end voice round trip
 
-1. Set the real `model_name` (matching `LLM_HF_REPO`'s served model id) in
-   `k8s/configmaps/gateway-config.yaml`.
-2. Build/push the gateway image (needs a sibling checkout of
-   `huggingface/speech-to-speech`):
+**Done (2026-09-09).** `speech-gateway`'s three k8s manifests had drifted out
+of sync with each other and with `gateway/Dockerfile` (wrong node, wrong
+port, unused env vars, the `gateway-config` ConfigMap never actually
+mounted, a placeholder `model_name`, and a third conflicting embedded
+`Service`) - none of it worked before this pass. Fixed:
+
+1. `k8s/configmaps/gateway-config.yaml`: `model_name` set to
+   `/models/gemma-4-E4B-it-Q8_0.gguf` (the literal string llama.cpp reports
+   as `"model"` in its chat-completion response - confirmed via
+   `./scripts/smoke-test.sh llm`).
+2. `k8s/gateway/deployment.yaml` rewritten: `nodeName: node1` (was `node0`,
+   the control-plane node - `nodeName` pinning bypasses the scheduler's
+   taint check, so that pod would have landed there rather than been
+   rejected), `containerPort: 8765` (was 8080), `gateway-config` mounted at
+   `/etc/speech-to-speech` and passed as `args: ["serve",
+   "/etc/speech-to-speech/config.json"]` (upstream's `parse_arguments` only
+   takes the JSON-config path when it's the single positional arg - no
+   `--host`/`--port` alongside it), `tcpSocket` readiness/liveness probes
+   (no `/health` route exists upstream - confirmed by reading
+   `api/openai_realtime/server.py` in the pinned checkout), and the
+   duplicate embedded `Service` block deleted (`k8s/gateway/service.yaml` +
+   `service-nodeport.yaml` already covered ClusterIP 8765 / NodePort 30765
+   correctly).
+3. Build/push (see "Prerequisite: upstream checkout" above):
    ```bash
    ./scripts/build-and-push.sh <tag> /path/to/speech-to-speech-checkout
    ```
-3. ```bash
+4. ```bash
    ./scripts/deploy.sh gateway
    kubectl -n speech rollout status deployment/speech-gateway
+   ./scripts/smoke-test.sh gateway
    ```
-4. From a client machine on the LAN:
+   The `gateway` smoke test drives the actual OpenAI Realtime protocol over
+   the WebSocket with a **text** turn (no mic/speaker hardware needed) -
+   requires `pip install websockets` on whatever host runs it.
+5. **Known gotcha**: on cold start the gateway downloads the Silero VAD
+   model from GitHub via `torch.hub.load` - this failed with DNS resolution
+   errors several times in a row before succeeding (`node1` clearly has
+   real internet access - confirmed directly via SSH - so this looks like a
+   transient in-pod DNS flake, not a hard block). Kubernetes' restart policy
+   retried it into working. If this becomes a recurring problem, pre-seed
+   `/root/.cache/torch/hub` via a hostPath volume (same pattern as the
+   STT/TTS/LLM model caches) rather than relying on retries.
+6. Manual verification with a real client (needs a human with a mic - not
+   scriptable):
    ```bash
    pip install speech-to-speech
    speech-to-speech talk --url ws://<node1-ip>:30765/v1/realtime
    ```
    Speak a test utterance; confirm transcript, LLM response, and audible
-   synthesized speech all round-trip correctly. If `talk` doesn't connect,
-   fall back to a raw WebSocket client (`wscat`, or a short `websockets`
-   script) to isolate which hop is failing.
-5. Record the observed end-to-end TTFA in `docs/benchmarks.md`.
+   synthesized speech all round-trip correctly.
+7. Record the observed end-to-end TTFA in `docs/benchmarks.md`.
+
+## Phase E.2 - Browser voice-chat UI
+
+**Done (2026-09-09).** Reuses upstream's own `demo/` app (a browser
+voice-chat UI already speaking the same OpenAI Realtime protocol) rather
+than building custom UI code - matches this repo's "thin wrapper around
+upstream" convention. Two things had to be solved beyond just deploying it:
+
+- **TLS**: browsers refuse microphone access (`getUserMedia()`) over plain
+  `http://<lan-ip>` - only `https://` or `localhost` count as a secure
+  context. `kubernetes/ingress-nginx` was archived in March 2026 (no
+  further releases/security fixes) so it's not something to newly install;
+  **Traefik** is used instead (`k8s/traefik/deployment.yaml` - static
+  manifests, no Helm, deployed into the `speech` namespace to reuse the
+  existing `local-registry-cred` secret) with a self-signed cert (SANs for
+  all 4 node IPs) as a k8s `Secret`.
+- **Mixed content**: once the demo page is served over `https://`, browsers
+  block a plain `ws://` connection dialed from it as mixed active content -
+  and `SPEECH_TO_SPEECH_URL` is dialed **client-side by the browser itself**
+  (confirmed from the demo's own README), not proxied through the demo
+  server. So the gateway's WebSocket also has to be reachable as `wss://`
+  through the *same* Ingress/cert, not just the demo's static page -
+  `k8s/traefik/ingress.yaml` routes both `/v1/realtime` (→ `speech-gateway`)
+  and `/` (→ `speech-demo`) under one TLS block.
+
+**Known gotcha (cost real debugging time - documented so it isn't repeated)**:
+declaring `--entrypoints.websecure.address=:8443` alone is not enough. The
+entrypoint will still opportunistically complete a TLS handshake (serving
+*some* cert), and the Traefik API will show the Ingress-derived routers and
+services as fully `"enabled"`/`"UP"` - but every real request 404s anyway,
+because the entrypoint was never told to actually terminate TLS for its
+routers. The fix is `--entrypoints.websecure.http.tls=true` (already in
+`k8s/traefik/deployment.yaml`). Confirmed by testing the exact same
+router/rule through a second, plain-HTTP entrypoint (worked immediately)
+before finding this flag - if a `wss://`/`https://` Ingress path 404s
+despite `/api/http/routers` and `/api/http/services` looking correct, this
+flag is the first thing to check.
+
+Steps:
+
+1. Mirror Traefik (`traefik` entry added to `scripts/mirror-images.sh`):
+   ```bash
+   docker pull docker.io/library/traefik:v3.3
+   docker tag docker.io/library/traefik:v3.3 local-registry:5000/traefik:v3.3
+   docker push local-registry:5000/traefik:v3.3
+   ```
+2. Self-signed cert + Secret (regenerate if node IPs ever change):
+   ```bash
+   openssl req -x509 -nodes -newkey rsa:2048 -days 825 \
+     -keyout tls.key -out tls.crt -subj "/CN=speech-demo.local" \
+     -addext "subjectAltName=IP:192.168.10.30,IP:192.168.10.31,IP:192.168.10.32,IP:192.168.10.33,DNS:speech-demo.local"
+   kubectl -n speech create secret tls speech-demo-tls --cert=tls.crt --key=tls.key
+   ```
+3. ```bash
+   ./scripts/deploy.sh traefik
+   kubectl -n speech rollout status deployment/traefik
+   ```
+4. Build/push the demo image - only `demo/Dockerfile` is vendored in this
+   repo (a patched copy of upstream's own; see that file's header comment
+   for why), the rest of `demo/`'s app code is *not* copied in, build
+   context is the upstream checkout's `demo/` subfolder:
+   ```bash
+   ./scripts/build-and-push.sh <tag> /path/to/speech-to-speech-checkout
+   ```
+5. `k8s/demo/deployment.yaml`'s `SPEECH_TO_SPEECH_URL` must be the
+   Ingress's `wss://<node-ip>:30443/v1/realtime` address (matching whatever
+   `nodePort` `k8s/traefik/deployment.yaml`'s Service uses) - **not** the
+   plain gateway NodePort and **not** a cluster-internal Service DNS name,
+   for the mixed-content reason above.
+   ```bash
+   ./scripts/deploy.sh demo
+   kubectl -n speech rollout status deployment/speech-demo
+   ```
+6. Protocol-level check (scriptable, no mic needed) - confirms the `wss://`
+   path through the Ingress actually completes the OpenAI Realtime
+   handshake, isolating Traefik/TLS/routing from the browser/audio layer:
+   ```bash
+   python3 -c "
+   import asyncio, json, ssl, websockets
+   async def main():
+       ctx = ssl.create_default_context()
+       ctx.check_hostname = False
+       ctx.verify_mode = ssl.CERT_NONE
+       async with websockets.connect('wss://<node-ip>:30443/v1/realtime', ssl=ctx) as ws:
+           evt = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
+           assert evt['type'] == 'session.created', evt
+           print('OK')
+   asyncio.run(main())
+   "
+   ```
+7. Manual verification (needs a human with a mic on the LAN - not
+   scriptable): open `https://<node-ip>:30443/`, accept the self-signed
+   cert warning once per device, click the orb, speak, confirm the transcript
+   + LLM reply + synthesized audio all round-trip.
 
 ## Phase F - Probes/resources/observability
 
@@ -344,5 +487,6 @@ already built into `stt/app/main.py` and `tts/app/main.py` - see
 
 ## Phase G - Deferred
 
-WebRTC, gRPC internal transport, OpenTelemetry, multi-replica/HA, the
-optional `demo/` frontend. Not started - see `docs/architecture.md`.
+WebRTC, gRPC internal transport, OpenTelemetry, multi-replica/HA. Not
+started - see `docs/architecture.md`. (The browser `demo/` frontend
+previously listed here is done - see Phase E.2 above.)

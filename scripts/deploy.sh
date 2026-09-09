@@ -3,7 +3,7 @@
 # Idempotent (kubectl apply) — safe to re-run after edits.
 #
 # Usage: ./scripts/deploy.sh [phase]
-#   phase: all (default) | scaffolding | llm | stt | tts | gateway
+#   phase: all (default) | scaffolding | llm | stt | tts | gateway | traefik | demo
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -45,12 +45,25 @@ gateway() {
   kubectl apply -f "${K8S}/gateway/service-nodeport.yaml"
 }
 
+traefik() {
+  echo "== traefik (ingress controller)"
+  kubectl apply -f "${K8S}/traefik/deployment.yaml"
+  kubectl apply -f "${K8S}/traefik/ingress.yaml"
+}
+
+demo() {
+  echo "== speech-demo (browser voice-chat UI)"
+  kubectl apply -f "${K8S}/demo/deployment.yaml"
+}
+
 case "${PHASE}" in
-  all) scaffolding; llm; stt; tts; gateway ;;
+  all) scaffolding; llm; stt; tts; gateway; traefik; demo ;;
   scaffolding) scaffolding ;;
   llm) llm ;;
   stt) stt ;;
   tts) tts ;;
   gateway) gateway ;;
+  traefik) traefik ;;
+  demo) demo ;;
   *) echo "unknown phase: ${PHASE}" >&2; exit 1 ;;
 esac

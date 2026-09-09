@@ -2,7 +2,7 @@
 # Per-service smoke tests for Phases B/C/D. Run via kubectl port-forward so
 # it works from outside the cluster too.
 #
-# Usage: ./scripts/smoke-test.sh <llm|stt|tts> [args]
+# Usage: ./scripts/smoke-test.sh <llm|stt|tts|gateway> [args]
 set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-speech}"
@@ -51,8 +51,42 @@ case "${CMD}" in
       --output "${out}"
     echo "wrote ${out} ($(wc -c < "${out}") bytes) — play with: aplay ${out} (or any WAV player)"
     ;;
+  gateway)
+    # No /health route exists upstream (WS-only ASGI app) - drive the actual
+    # OpenAI Realtime protocol instead. Uses a text turn (not audio) so this
+    # is runnable without mic/speaker hardware. Requires: pip install websockets
+    pid=$(pf speech-gateway 18765 8765)
+    trap 'kill "${pid}" 2>/dev/null || true' EXIT
+    python3 - <<'PY'
+import asyncio, json
+
+async def main():
+    import websockets
+    async with websockets.connect("ws://localhost:18765/v1/realtime") as ws:
+        first = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
+        assert first["type"] == "session.created", first
+        print("-- session.created OK")
+        await ws.send(json.dumps({
+            "type": "conversation.item.create",
+            "item": {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Say hello in five words."}],
+            },
+        }))
+        await ws.send(json.dumps({"type": "response.create"}))
+        for _ in range(200):
+            evt = json.loads(await asyncio.wait_for(ws.recv(), timeout=15))
+            if evt["type"] == "response.done":
+                print("-- response.done OK")
+                return
+        raise AssertionError("no response.done received")
+
+asyncio.run(main())
+PY
+    ;;
   *)
-    echo "usage: $0 <llm|stt|tts> [args]" >&2
+    echo "usage: $0 <llm|stt|tts|gateway> [args]" >&2
     exit 1
     ;;
 esac

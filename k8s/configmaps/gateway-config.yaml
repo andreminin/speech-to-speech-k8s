@@ -22,7 +22,7 @@ data:
       "llm_backend": "responses-api",
       "responses_api_base_url": "http://speech-llm.speech.svc.cluster.local:8080/v1",
       "responses_api_api_key": "",
-      "model_name": "CHANGE_ME_gguf_model_id",
+      "model_name": "/models/gemma-4-E4B-it-Q8_0.gguf",
       "init_chat_role": "system",
       "init_chat_prompt": "You are a helpful voice assistant.",
 

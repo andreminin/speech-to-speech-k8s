@@ -36,6 +36,18 @@ fi
 docker build -f "${ROOT_DIR}/gateway/Dockerfile" -t "${REGISTRY}/speech-gateway:${TAG}" "${UPSTREAM_CHECKOUT}"
 docker push "${REGISTRY}/speech-gateway:${TAG}"
 
+echo "== speech-demo (build context: ${UPSTREAM_CHECKOUT}/demo)"
+if [[ ! -d "${UPSTREAM_CHECKOUT}/demo" ]]; then
+  echo "error: ${UPSTREAM_CHECKOUT}/demo not found — pass the path to a" >&2
+  echo "checkout of https://github.com/huggingface/speech-to-speech as the" >&2
+  echo "second argument." >&2
+  exit 1
+fi
+# demo/Dockerfile here is a patched copy of upstream's own (see the file's
+# header comment) — context is still the checkout's demo/ dir, not vendored.
+docker build -f "${ROOT_DIR}/demo/Dockerfile" -t "${REGISTRY}/speech-demo:${TAG}" "${UPSTREAM_CHECKOUT}/demo"
+docker push "${REGISTRY}/speech-demo:${TAG}"
+
 echo
-echo "Pushed ${REGISTRY}/{speech-stt,speech-tts,speech-gateway}:${TAG}"
+echo "Pushed ${REGISTRY}/{speech-stt,speech-tts,speech-gateway,speech-demo}:${TAG}"
 echo "Update the image: tags in k8s/*/deployment.yaml to match if not using 'latest'."

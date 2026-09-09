@@ -21,27 +21,51 @@ built here.
 ## Components
 
 ```
-Client (mic/speaker)
-   │  WebSocket, OpenAI Realtime protocol (/v1/realtime)
+Browser (mic/speaker)
+   │  HTTPS (self-signed cert)
    ▼
-speech-gateway   (node1, CPU only, no GPU)
-   │ HTTP POST /v1/audio/transcriptions   │ HTTP POST /v1/responses   │ HTTP POST /v1/audio/speech
-   ▼                                      ▼                            ▼
-speech-stt (node2)                  speech-llm (node3)            speech-tts (node2 or node3*)
-Parakeet-TDT via nano-parakeet       llama.cpp server-cuda,        Qwen3-TTS via faster-qwen3-tts
-(custom FastAPI wrapper)             serving a GGUF model           (custom FastAPI wrapper)
-                                      (no custom code)
+Traefik   (Ingress, speech ns - node unpinned)
+   │ /            │ /v1/realtime (wss, WS upgrade)
+   ▼               ▼
+speech-demo     speech-gateway   (both node1, CPU only, no GPU)
+(upstream's        │  WebSocket, OpenAI Realtime protocol - also reachable
+ own demo/ app,     │  directly as ws://<node1-ip>:30765/v1/realtime for the
+ unmodified)        │  CLI client / scripted smoke test (no TLS needed there)
+                    │ HTTP POST /v1/audio/transcriptions   │ HTTP POST /v1/responses   │ HTTP POST /v1/audio/speech
+                    ▼                                      ▼                            ▼
+              speech-stt (node3, colocated        speech-llm (node2)            speech-tts (node3, colocated
+              with speech-tts - see "GPU           llama.cpp server-cuda,        with speech-stt)
+              scheduling constraint" below)         serving a GGUF model         Qwen3-TTS via faster-qwen3-tts
+              Parakeet-TDT via nano-parakeet        (no custom code)             (custom FastAPI wrapper)
+              (custom FastAPI wrapper)
 ```
 
-`*` TTS placement is decided by the Phase D benchmark (`docs/benchmarks.md`),
-not fixed in advance - see the GPU scheduling constraint below.
+Node assignment above is the actual current layout (see
+`docs/deployment.md`'s Status section for how it got here - it's the mirror
+image of "Option A" below, not a deliberately chosen option). A CLI client
+(`speech-to-speech talk`) or the smoke test can skip Traefik/TLS entirely
+and hit the gateway's plain `ws://` NodePort directly; only the browser
+demo needs the `wss://` path, because browsers require a secure context for
+microphone access and then refuse a plain `ws://` connection from an
+`https://` page as mixed content (see `docs/deployment.md` Phase E.2).
 
 - **speech-gateway**: upstream `speech-to-speech` image, unmodified, run as
-  `serve` with `--stt openai` / `--llm_backend responses-api` / `--tts openai`
-  pointed at the three internal Services. See `gateway/Dockerfile` and
-  `k8s/configmaps/gateway-config.yaml` for the exact flags (verified against
+  `serve <config.json>` (a mounted ConfigMap, not CLI flags) with `stt:
+  openai` / `llm_backend: responses-api` / `tts: openai` pointed at the
+  three internal Services. See `gateway/Dockerfile` and
+  `k8s/configmaps/gateway-config.yaml` for the exact config (verified against
   upstream's `arguments_classes/openai_stt_arguments.py` and
   `openai_tts_arguments.py`, not guessed).
+- **speech-demo**: upstream's own browser voice-chat UI (`demo/` in the
+  upstream checkout), unmodified app code - only `demo/Dockerfile` is
+  vendored here (as a patched copy, see that file's header comment), not
+  the rest of `demo/`. Speaks the same OpenAI Realtime protocol as the CLI
+  client, dialed directly from the browser (not proxied server-side) - see
+  "Security" below for why that puts a TLS requirement on the gateway too.
+- **Traefik**: Ingress controller terminating TLS with a self-signed cert,
+  fronting both `speech-demo` and `speech-gateway`'s WebSocket under one
+  cert/host. Chosen over `kubernetes/ingress-nginx` because that project
+  was archived in March 2026 (no further releases/security fixes).
 - **speech-stt**: no standalone STT-serve mode exists upstream, so this is
   new code (`stt/`) - a thin FastAPI service loading `nano-parakeet` once at
   startup and exposing `/v1/audio/transcriptions`, mirroring exactly how
