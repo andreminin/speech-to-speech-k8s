@@ -3,6 +3,32 @@
 Do these in order. Each step's exit criteria must pass before moving on -
 see the corresponding phase in the plan for the full rationale.
 
+## Status (2026-09-09)
+
+- `speech-llm` stayed pinned to `node2`. This is **not** the
+  documented Option A/B split (`docs/architecture.md`) - it's a temporary
+  layout kept as-is for now (see "Next plan" below).
+- `speech-tts` failed to start against the previously-built image
+  (`voicefix1`): the `cudnn-runtime` base image has no C compiler, and
+  `qwen_tts`'s rotary-embedding path JIT-compiles a Triton kernel at first
+  inference, which needs one. Fixed in `tts/Dockerfile` by adding
+  `build-essential`, `python3-dev` (Triton also needs `Python.h`), and `sox`
+  (the `faster-qwen3-tts` package shells out to the `sox` binary). Rebuilt
+  and pushed as `local-registry:5000/speech-tts:voicefix3`; `k8s/tts/deployment.yaml`
+  now points at that tag.
+- `scripts/smoke-test.sh`'s `pf()` helper backgrounded `kubectl port-forward`
+  without redirecting its output, so it inherited the pipe backing
+  `pid=$(pf ...)` and blocked the whole script forever (the port-forward
+  process is long-running and never closes that pipe, so the command
+  substitution never sees EOF). Fixed by redirecting the backgrounded
+  process's stdout/stderr to `/dev/null`.
+- Verified individually on `node3`, one at a time (see "GPU scheduling
+  constraint" in `docs/architecture.md` - two separate Deployments each
+  requesting `nvidia.com/gpu: 1` can't co-schedule on one physical GPU):
+  - `speech-tts`: `./scripts/smoke-test.sh tts "hello from the home lab" /tmp/out.wav` → valid WAV returned.
+  - `speech-stt`: `./scripts/smoke-test.sh stt wav/16000/test01_20s.wav` → correct transcript returned.
+- `speech-llm` not exercised this pass; it's currently scaled to 0.
+
 ## Phase A0 - Cluster health
 
 ```bash
@@ -195,6 +221,11 @@ kubectl run curl-test --namespace=speech --image=local-registry:5000/cuda:12.9.1
 ## Phase D - `speech-tts` standalone + placement benchmark
 
 1. `speech-tts` image is already built/pushed by `build-and-push.sh` above.
+   The base `cudnn-runtime` image ships no C compiler; `tts/Dockerfile`
+   installs `build-essential`, `python3-dev`, and `sox` so Triton's
+   JIT-compiled kernel and `faster-qwen3-tts`'s `sox` shell-out both work -
+   see "Status" above if `Application startup failed` shows a missing
+   `gcc`/`Python.h`/`sox` in the pod logs.
 2. ```bash
    ./scripts/deploy.sh tts
    kubectl -n speech rollout status deployment/speech-tts
@@ -206,7 +237,60 @@ kubectl run curl-test --namespace=speech --image=local-registry:5000/cuda:12.9.1
    decide Option A vs Option B. If co-location wins, swap in
    `k8s/stt/deployment-colocated-with-tts.yaml` (delete the separate
    `speech-stt`/`speech-tts` Deployments+Services first - that combined
-   manifest defines its own Services with the same names).
+   manifest defines its own Services with the same names). As of the
+   2026-09-09 status above, only "STT alone" and "TTS alone" have been
+   verified (one at a time on `node3`) - the co-located rows are still
+   open; see "Next plan" immediately below.
+
+## Next plan - cooperative GPU sharing for STT + TTS
+
+`node3` currently hosts both `speech-stt` and `speech-tts`, each requesting
+`nvidia.com/gpu: 1`, but its single physical GPU only satisfies one such
+request at a time under the default (non-MIG, non-time-sliced)
+NVIDIA device-plugin behavior - confirmed directly by the
+`UnexpectedAdmissionError ... Available: 0` events seen when both tried to
+schedule. Right now STT and TTS are run one at a time (scale the other to
+0 first). Options to let them coexist, roughly in order of how much they
+change:
+
+1. **Adapt `k8s/stt/deployment-colocated-with-tts.yaml` for `node3`**
+   (lowest risk, no cluster-wide config change). This manifest already
+   implements the "one Pod, two containers, one GPU request" pattern - only
+   the container that declares `nvidia.com/gpu: 1` needs the request, the
+   other container gets the same GPU visibility for free via the Pod-level
+   device-plugin grant. It currently targets `node2`, a `models-node2` PVC,
+   and `stt-config`/`tts-config` ConfigMaps that are stale relative to the
+   working setup (`TTS_BACKEND: ggml` vs. the `torch` backend actually in
+   use, `HF_HUB_OFFLINE: "0"`, PVC paths instead of the `hostPath` mounts
+   `k8s/stt/deployment.yaml`/`k8s/tts/deployment.yaml` use today). Needed
+   before this is usable: retarget `nodeName` to `node3`, switch the volume
+   to the same `hostPath` mounts as the current separate Deployments (or a
+   `models-node3` PVC if one exists), and refresh both ConfigMaps to match
+   the env vars in the current working Deployments.
+2. **NVIDIA device-plugin time-slicing** (`replicas: N` in the plugin's
+   `ConfigMap`, cluster-wide or per-node via a `nodeSelector`'d plugin
+   pod) - makes the plugin advertise `N` virtual GPU slots on `node3`'s one
+   physical GPU, so two Deployments each requesting `nvidia.com/gpu: 1` can
+   both schedule. No isolation between the two processes' VRAM or compute -
+   they share the same 16 GB, so this only helps if STT + TTS's combined
+   working-set fits, which needs measuring (see `docs/benchmarks.md`)
+   before turning it on.
+3. **NVIDIA MPS** (Multi-Process Service) - lower per-request overhead than
+   plain time-sliced context switching for concurrent CUDA processes on one
+   GPU, at the cost of extra daemonset/runtime setup. Worth revisiting only
+   if option 2's time-slicing shows contention/latency that MPS would
+   plausibly fix.
+4. **MIG is not available on this hardware** - the RTX 4060 Ti (`node2`)
+   and RTX 5060 Ti (`node3`) are consumer GPUs without MIG support, so that
+   isolation path (viable on datacenter GPUs like A100/H100) is off the
+   table here.
+
+Recommended next step: option 1 (adapt the colocated manifest for
+`node3`), since it needs no cluster-wide device-plugin change and its
+failure mode is easy to reason about (it's exactly today's working
+single-GPU setup, just two containers in one Pod). Fall back to option 2
+only if a single co-located Pod turns out to be too rigid (e.g. wanting to
+restart/scale STT and TTS independently).
 
 ## Phase E - Gateway + first end-to-end voice round trip
 

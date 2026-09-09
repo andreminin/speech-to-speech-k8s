@@ -11,7 +11,10 @@ shift || true
 
 pf() {
   local svc="$1" local_port="$2" remote_port="$3"
-  kubectl -n "${NAMESPACE}" port-forward "svc/${svc}" "${local_port}:${remote_port}" &
+  # Redirect stdout/stderr so this long-running background process doesn't
+  # inherit the pipe backing `pid=$(pf ...)` — otherwise that command
+  # substitution blocks forever waiting for EOF that never comes.
+  kubectl -n "${NAMESPACE}" port-forward "svc/${svc}" "${local_port}:${remote_port}" >/dev/null 2>&1 &
   local pid=$!
   sleep 2
   echo "${pid}"

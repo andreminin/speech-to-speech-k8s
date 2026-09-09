@@ -23,7 +23,7 @@ spec:
         - name: local-registry-cred
       containers:
         - name: speech-tts
-          image: local-registry:5000/speech-tts:voicefix1
+          image: local-registry:5000/speech-tts:voicefix3
           imagePullPolicy: IfNotPresent
           env:
             - name: TTS_MODEL_NAME

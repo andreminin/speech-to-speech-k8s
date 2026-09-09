@@ -107,6 +107,8 @@ Kubernetes GPU scheduling treats a GPU as a device resource (`nvidia.com/gpu: 1`
 
 See [`docs/architecture.md`](docs/architecture.md) for the current as-built design and [`docs/proposal.md`](docs/proposal.md) for the original design rationale.
 
+**Current placement, not a resolved Option A/B choice**: `speech-stt` and `speech-tts` are both pinned to `node3` right now and run one at a time - `node3`'s single GPU can't satisfy two separate `nvidia.com/gpu: 1` requests at once. See [Status and Next plan](docs/deployment.md#status-2026-09-09) in the deployment guide for what's verified and the plan for letting STT and TTS coexist on one GPU.
+
 ## Current implementation
 
 The repository contains:
@@ -344,6 +346,19 @@ It should **not** currently be considered:
 - a general-purpose GPU scheduler
 
 The cluster itself is part of the experiment.
+
+### Verified so far
+
+- `speech-stt` and `speech-tts` each individually confirmed `Running`/`Ready`
+  and smoke-tested on `node3` (one at a time - see the placement note
+  above).
+- `speech-llm` not yet exercised in this pass; currently scaled to 0.
+- Not yet done: running STT and TTS concurrently, and the full gateway
+  end-to-end round trip (Phase E).
+
+See [`docs/deployment.md`](docs/deployment.md#status-2026-09-09) for the
+detailed status and [the cooperative-GPU-sharing next plan](docs/deployment.md#next-plan---cooperative-gpu-sharing-for-stt--tts)
+for how STT + TTS coexisting on one GPU is expected to be tackled next.
 
 ## Future actions
 

@@ -5,7 +5,7 @@
 FROM local-registry:5000/cuda:12.9.1-cudnn-runtime-ubuntu24.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 python3-pip libsndfile1 \
+    python3 python3-pip python3-dev libsndfile1 build-essential sox \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
