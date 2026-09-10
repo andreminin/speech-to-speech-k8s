@@ -411,23 +411,15 @@ The MCP experiment is intentionally small, but it points toward a much more inte
 A future Synanton voice assistant could potentially use tools to interact with the platform:
 
 ```text
-"How ontologies are available?"
-
+"What ontologies are available?"
 "Is index storage abc healthy?"
-
 "Show me running inference workloads."
-
-"Restart the failed content extractor."
-
 "How much GPU capacity is available?"
-
-"Why is documents batch ABC still processing?"
-
-"Start reprocessing the failed audio badge."
-
-"Search my knowledge base for..."
+"Why is document batch ABC still processing?"
+"Search my knowledge base for <query>."
+"Restart the failed content extractor."
+"Start reprocessing the failed audio batch."
 ```
-
 
 This repository therefore provides a useful experimental front end for future voice interaction with:
 
