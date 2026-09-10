@@ -11,16 +11,20 @@ handful of files that need a local patch are vendored (`gateway/Dockerfile`,
 `demo/Dockerfile`). `scripts/build-and-push.sh` defaults to
 `../../huggingface/speech-to-speech`, resolved relative to wherever you run
 it from - so clone it as a **sibling of this repo's parent directory**, e.g.
-if this repo is at `~/workspace/andreminin/speech-to-speech-k8s`:
+if this repo is at `~/workspace/speech-to-speech-k8s`:
 
+https://github.com/andreminin/speech-to-speech project is forked https://github.com/huggingface/speech-to-speech
+
+Clone https://github.com/huggingface/speech-to-speech project in the same folder as speech-to-speech-k8s:
 ```bash
-git clone https://github.com/huggingface/speech-to-speech ~/workspace/huggingface/speech-to-speech
+cd ~/workspace/
+git clone https://github.com/andreminin/speech-to-speech.git
 ```
 
 Pass a different path as `build-and-push.sh`'s second argument if your
 layout differs.
 
-## Status (2026-09-09)
+## Status
 
 Current cluster layout: `node2 = speech-llm`, `node3 = speech-stt +
 speech-tts` colocated in one Pod (`speech-stt-tts`), `node1 = speech-gateway

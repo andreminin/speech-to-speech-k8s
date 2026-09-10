@@ -1,327 +1,518 @@
 # speech-to-speech-k8s
 
-Distributed deployment of Hugging Face's [`speech-to-speech`](https://github.com/huggingface/speech-to-speech) pipeline across a small home-lab Kubernetes cluster with local Docker registry imitating no-air on-prem cluster setup.
+**A Kubernetes home-lab project for learning distributed voice processing, GPU workloads, MCP tool calling and the foundations of future voice-enabled Synanton services.**
 
-The project is intentionally a **sandbox / playground for distributed AI inference experiments**. It is not intended to be a production-ready speech platform. The goal is to use the hardware that is already available, learn where the practical boundaries are, and experiment with splitting an AI pipeline across heterogeneous GPU nodes.
+This repository deploys a distributed speech-to-speech pipeline across a small, heterogeneous Kubernetes cluster.
+It is based on Hugging Face's [`speech-to-speech`](https://github.com/huggingface/speech-to-speech).
 
-## Why this project exists
+The project started as an experiment in running speech AI across several GPU nodes. 
+It has evolved into a practical learning environment for:
 
-The starting point is a home Kubernetes lab with three GPU worker nodes:
+- Kubernetes GPU scheduling and workload placement
+- distributed speech-to-speech inference
+- STT, LLM and TTS service separation
+- GPU and VRAM constraints
+- cross-node inference latency
+- local model and container registries
+- MCP (Model Context Protocol) tool calling
+- local AI infrastructure without relying on external AI services for every component
+- designing voice-processing components that can eventually be reused by the [Synanton](https://github.com/synanton) platform
 
-| Node | GPU | VRAM | Intended role |
-|---|---|---:|---|
-| `node1` | NVIDIA GeForce GTX 1650 | 4 GB | gateway / VAD / lightweight workloads |
-| `node2` | NVIDIA GeForce RTX 4060 Ti | 16 GB | LLM |
-| `node3` | NVIDIA GeForce RTX 5060 Ti | 16 GB | STT and TTS |
+> **This is a learning and experimentation project, not a production speech platform.**
 
-The nodes are connected by a **10 Gbit/s network**.
+------
 
-This hardware is deliberately heterogeneous. There is no single large GPU with enough VRAM to comfortably host every component of the fully-local speech-to-speech stack. Instead of treating that as a limitation, this project uses it as the reason to experiment with **distributed pipeline execution**.
+## Current status
 
-The important distinction is:
+The core end-to-end system is working.
 
-> The 16 GB GPUs are not combined into a virtual 32 GB GPU.
+A user can open the browser demo, speak into a microphone, receive a transcription, have the request processed by the LLM and hear the generated response.
 
-Each model runs on a GPU that can hold it, and the pipeline passes intermediate results between Kubernetes services:
+The demo can also invoke local MCP tools from a spoken conversation.
 
-```text
-Client
-  │
-  │ WebSocket / OpenAI Realtime
-  ▼
-speech-gateway                         node1
-  │
-  ├──────── HTTP ──────► speech-stt    node2
-  │                         │
-  │                         ▼ transcript
-  │
-  ├──────── HTTP ──────► speech-llm   node3
-  │                         │
-  │                         ▼ response text
-  │
-  └──────── HTTP ──────► speech-tts   node2 or node3
-                            │
-                            ▼ audio
-                         Client
-```
+### Working today
 
-The current implementation deliberately uses **OpenAI-compatible HTTP** between services. This keeps the first experiment close to the upstream `speech-to-speech` interfaces and avoids introducing a custom RPC protocol before there is evidence that one is needed.
+-  Kubernetes deployment across three GPU workers
+-  Distributed STT / LLM / TTS inference
+-  Browser-based voice conversation
+-  Microphone input
+-  Speech-to-text
+-  LLM response generation
+-  Text-to-speech
+-  HTTPS/WSS access through the Kubernetes ingress
+-  Local MCP server
+-  `local_time` MCP tool
+-  Internet search through a local SearXNG instance
+-  Voice-triggered MCP tool calls
+-  GPU scheduling through the NVIDIA Kubernetes device plugin
+-  STT + TTS colocated on a single GPU where Kubernetes GPU allocation requires it
+-  Local container registry
+-  Local model caching on the Kubernetes nodes
 
-A future experiment may replace HTTP with streaming gRPC if measurements show that transport overhead or streaming semantics are limiting the system.
 
-## What this project is for
+The MCP implementation intentionally keeps the gateway unchanged. 
+Tool execution is handled by the demo/client side using the OpenAI Realtime tool-calling model.
 
-The repository is primarily a laboratory for answering practical questions such as:
+------
 
-- Can a speech-to-speech pipeline be split across several small GPU nodes?
-- Which stages fit comfortably into 16 GB of VRAM?
-- Can STT and TTS share one 16 GB GPU?
-- Is it better to place TTS beside STT or beside the LLM?
-- How much latency is introduced by crossing the network between pipeline stages?
-- Is 10 Gbit/s sufficient for realtime audio and inference traffic?
-- Where is the real bottleneck: VRAM, GPU compute, model loading, CPU, network latency, or inference throughput?
-- When does HTTP become a meaningful limitation compared with streaming gRPC?
-- How should the same workloads eventually be represented by a more general GPU scheduling/execution layer?
+# Why this project exists
 
-The project therefore favors **small, measurable experiments over premature platform engineering**.
+This repository is deliberately more than a voice demo.
 
-## Architecture
+The goal is to use a real workload to learn how AI systems behave when deployed on a small Kubernetes cluster with heterogeneous hardware.
 
-The current architecture is an HTTP-first distributed pipeline:
+The home lab has:
 
-```text
-                         Kubernetes
-
-  ┌──────────────────────────────────────────────────────────┐
-  │                                                          │
-  │  node1                    node2              node3       │
-  │  4 GB GPU                 16 GB GPU           16 GB GPU  │
-  │                                                          │
-  │  ┌──────────────┐       ┌──────────────┐  ┌───────────┐  │
-  │  │    Gateway   │──────►│     STT      │  │    LLM    │  │
-  │  │              │       │ Parakeet-TDT │  │ llama.cpp │  │
-  │  └──────┬───────┘       └──────┬───────┘  └─────┬─────┘  │
-  │         │                      │                 │       │
-  │         │                      └──── transcript ─┘       │
-  │         │                                                │
-  │         └──────────────────────────────────────────────► │
-  │                                  TTS                     │
-  │                            Qwen3-TTS                     │
-  │                                                          │
-  └──────────────────────────────────────────────────────────┘
-```
-
-The exact TTS placement is intentionally experimental:
-
-```text
-Option A:
-  node2 = STT + TTS
-  node3 = LLM
-```
-
-Kubernetes GPU scheduling treats a GPU as a device resource (`nvidia.com/gpu: 1`), not as an arbitrary amount of VRAM. Therefore two independent pods requesting one GPU cannot simply share the same physical GPU under the normal device-plugin model. When STT and TTS need to share one GPU, they can be colocated in the same workload.
-
-See [`docs/architecture.md`](docs/architecture.md) for the current as-built design and [`docs/proposal.md`](docs/proposal.md) for the original design rationale.
-
-**Current placement is the mirror image of "Option A", not a resolved choice**: `speech-llm` is pinned to `node2` (since Phase B) and `speech-stt` + `speech-tts` are colocated in one Pod on `node3` (`k8s/stt/deployment-colocated-with-tts.yaml`) - `node3`'s single GPU can't satisfy two separate `nvidia.com/gpu: 1` requests, so STT and TTS share it as two containers in one Pod instead of two Deployments. Confirmed working with both smoke-tested concurrently; combined VRAM 6.8GB of 16GB. The "Option B" shape (LLM+TTS colocated) hasn't been benchmarked. See [Status](docs/deployment.md#status-2026-09-09) in the deployment guide and the results in [`docs/benchmarks.md`](docs/benchmarks.md).
-
-## Current implementation
-
-The repository contains:
-
-- `gateway/` — packages upstream `speech-to-speech` and runs its `serve` command against the distributed inference services.
-- `stt/` — thin FastAPI adapter exposing `/v1/audio/transcriptions`, backed by Parakeet-TDT / `nano-parakeet`.
-- `tts/` — thin FastAPI adapter exposing `/v1/audio/speech`, backed by Qwen3-TTS / `faster-qwen3-tts`.
-- `llm/` — configuration/documentation for an OpenAI-compatible `llama.cpp` server.
-- `k8s/` — Kubernetes namespace, storage, ConfigMaps, Deployments, Services, and GPU smoke-test pods.
-- `scripts/` — image build/push, deployment, and smoke-test helpers.
-- `docs/` — proposal, architecture, deployment, benchmarks, observability, and troubleshooting documentation.
-
-The wrappers are intentionally thin. They adapt the upstream/OpenAI-compatible APIs to independently deployable inference services; they are not intended to become a second S2S orchestration framework.
-
-## Current milestone
-
-The current milestone is **distributed, turn-oriented execution**, not yet a fully optimized cross-node streaming implementation:
-
-```text
-audio turn
-   ↓
-STT
-   ↓
-transcript
-   ↓
-LLM
-   ↓
-response text
-   ↓
-TTS
-   ↓
-audio
-```
-
-The longer-term target is:
-
-```text
-audio chunks
-   ↓
-streaming STT
-   ↓
-partial/final transcript
-   ↓
-streaming LLM
-   ↓
-token/text chunks
-   ↓
-streaming TTS
-   ↓
-audio chunks
-```
-
-Streaming gRPC is a possible future optimization, but it will be introduced only if benchmarks show that the current HTTP-based design is the limiting factor.
-
-## Hardware and networking assumptions
-
-The lab is intentionally modest:
-
-- 3 Kubernetes GPU worker nodes
-- 1 × 4 GB GPU
-- 2 × 16 GB GPUs
+- one small CPU-only control-plane node
+- three GPU workers
+- different NVIDIA GPUs
 - 10 Gbit/s inter-node networking
-- NVIDIA Container Toolkit
-- Kubernetes NVIDIA GPU device plugin / GPU support
-- local model/image storage where practical
+- local container registry
+- local model storage
+- Kubernetes GPU scheduling
+- Longhorn storage
+- Calico networking
 
-The 10 Gbit/s network is important because the experiment is specifically about **cross-node inference**. The expected traffic between stages is relatively small compared with the capacity of a 10 Gbit/s link; therefore the interesting measurement is likely to be latency and streaming behavior rather than raw network bandwidth.
+This makes it possible to experiment with questions that are difficult to answer on a single development machine:
 
-## Quick start
+- How should AI workloads be split between GPU nodes?
+- How much VRAM does each model actually consume?
+- Can multiple inference components share one GPU?
+- When does Kubernetes scheduling become a constraint?
+- How much latency is introduced by moving inference between nodes?
+- Is HTTP sufficient for distributed speech processing?
+- When would streaming gRPC become worthwhile?
+- How should GPU workloads be scheduled based on model requirements?
+- How should AI tools be exposed to a voice assistant?
+- What parts of this experiment could eventually become reusable platform capabilities?
 
-First verify that Kubernetes and the GPUs are healthy:
+------
 
-```bash
-kubectl get nodes
-kubectl get pods -A
-kubectl get nodes -o custom-columns=NAME:.metadata.name,GPUS:.status.allocatable.nvidia\.com/gpu
-```
+# Architecture
 
-Run the GPU smoke tests before troubleshooting application containers:
-
-```bash
-kubectl apply -f k8s/smoke/nvidia-smi-node1.yaml
-kubectl apply -f k8s/smoke/nvidia-smi-node2.yaml
-kubectl apply -f k8s/smoke/nvidia-smi-node3.yaml
-```
-
-Then follow [`docs/deployment.md`](docs/deployment.md) in order for a
-from-scratch walkthrough (building images, pre-downloading models, etc).
-
-**Once images are built/pushed and models are pre-downloaded** (one-time,
-per `docs/deployment.md`), bring up everything else with one command:
-
-```bash
-./scripts/create-registry-secret.sh   # once, if not already done
-./scripts/install.sh                  # applies every manifest, waits for rollouts
-```
-
-and tear it all down (namespace + Traefik's cluster-scoped RBAC; node-local
-model caches under `/mnt/local-fast` are left untouched) with:
-
-```bash
-./scripts/cleanup.sh
-```
-
-The intended end-user entry point is the browser voice-chat demo:
+The current system is a distributed, turn-oriented speech pipeline:
 
 ```text
-https://<any-node-ip>:30443/
+                         Home Kubernetes Cluster
+
+                              ┌───────────────┐
+                              │ speech-demo   │
+                              │ Browser UI    │
+                              └───────┬───────┘
+                                      │
+                                HTTPS / WSS
+                                      │
+                              ┌───────▼───────┐
+                              │    Gateway    │
+                              │   speech-to-  │
+                              │    speech     │
+                              └───────┬───────┘
+                                      │
+                    ┌─────────────────┼─────────────────┐
+                    │                 │                 │
+                    ▼                 ▼                 ▼
+              ┌──────────┐     ┌───────────┐      ┌──────────┐
+              │   STT    │     │   LLM     │      │   TTS    │
+              │ Parakeet │     │ llama.cpp │      │  Qwen3   │
+              └──────────┘     └───────────┘      └──────────┘
+                    │                 │                 │
+                    └─────────────────┼─────────────────┘
+                                      │
+                                      ▼
+                                  Audio reply
 ```
-(accept the self-signed certificate warning once per device - needed for
-microphone access). For a CLI client instead:
 
-```bash
-pip install speech-to-speech
-speech-to-speech talk --url ws://<node1-ip>:30765/v1/realtime
-```
+The current implementation uses HTTP/OpenAI-compatible service boundaries.
 
-## Troubleshooting
-
-Start with [`docs/troubleshooting.md`](docs/troubleshooting.md).
-
-The troubleshooting guide deliberately starts with infrastructure rather than application code:
-
-1. Are the Kubernetes nodes `Ready`?
-2. Can the nodes be reached over the network?
-3. Does Kubernetes expose the NVIDIA GPU?
-4. Can a simple `nvidia-smi` pod run on each GPU node?
-5. Can the nodes pull the required CUDA/cuDNN images?
-6. Can the inference pods acquire their GPU resource?
-7. Only then debug STT/TTS/model behavior.
-
-This ordering is important in a home lab: a powered-off or unreachable worker can look like an application failure even though Kubernetes never had a chance to start the workload.
-
-The troubleshooting guide also records known issues around:
-
-- `NotReady` workers and kubelet/node availability
-- NVIDIA device-plugin and `RuntimeClass`
-- local registry authentication and TLS
-- CUDA/cuDNN image availability
-- GPU co-scheduling / `Insufficient nvidia.com/gpu`
-- Qwen3-TTS streaming API compatibility
-
-## Experiments
-
-The project is expected to evolve through measurements rather than assumptions.
-
-Useful experiments include:
-
-### GPU placement
+A future implementation may investigate:
 
 ```text
-A: node2 = LLM
-   node3 = STT + TTS
+             streaming audio
+                    │
+                    ▼
+              streaming STT
+                    │
+             partial transcript
+                    │
+                    ▼
+              streaming LLM
+                    │
+              text/token stream
+                    │
+                    ▼
+              streaming TTS
+                    │
+                    ▼
+              streaming audio
 ```
 
-### Latency
+Streaming gRPC is therefore an experiment for the future, not a current requirement.
 
-Measure:
+------
 
-- STT latency
-- LLM time-to-first-token
-- TTS time-to-first-audio
-- end-to-end time-to-first-audio
-- network latency between nodes
+# Home-lab Kubernetes cluster
 
-### Resource usage
+The system runs on a four-node bare-metal Kubernetes cluster.
 
-Measure:
+## As-built cluster - 2026-09-09
 
-- VRAM usage
-- GPU utilization
-- CPU utilization
-- model load time
-- peak memory
-- steady-state memory
-- concurrent sessions
+| Node    | Role                   | Kubernetes | CPU  | RAM    | GPU         | GPU VRAM | Internal IP     |
+| ------- | ---------------------- | ---------- | ---- | ------ | ----------- | -------- | --------------- |
+| `node0` | control-plane / master | v1.37.0    | 4    | 16 GiB | -           | -        | `192.168.10.30` |
+| `node1` | worker                 | v1.37.0    | 16   | 64 GiB | GTX 1650    | 4 GiB    | `192.168.10.31` |
+| `node2` | worker                 | v1.37.0    | 20   | 64 GiB | RTX 4060 Ti | 16 GiB   | `192.168.10.32` |
+| `node3` | worker                 | v1.37.0    | 20   | 64 GiB | RTX 5060 Ti | 16 GiB   | `192.168.10.33` |
 
-### Scaling
+The nodes also have a separate `192.168.18.x` network on 1 Gbit/s interface.
 
-Start with one conversation and increase concurrency until latency or VRAM becomes unacceptable.
+The `192.168.10.x` network is the 10 Gbit/s SFP+ network used for the main cluster traffic.
 
-The goal is not to produce a generic benchmark. The goal is to understand how this particular heterogeneous home-lab cluster behaves.
+`node0` also hosts the local Docker registry (local-registry:5000).
 
-## Why not use one larger GPU?
+------
 
-Because the purpose of the project is not simply to run the model.
+# Kubernetes infrastructure
 
-A single larger GPU would answer:
+The cluster currently uses:
 
-> Can this model run on a sufficiently large machine?
+### Networking
 
-This lab is intended to answer a different question:
+[Calico](https://www.tigera.io/project-calico/) is the cluster CNI.
 
-> Can a realistic AI pipeline be decomposed into independently deployable inference stages and executed efficiently across a small Kubernetes cluster of heterogeneous GPUs?
+The cluster currently includes:
 
-That question is more useful for experimenting with distributed inference, GPU scheduling, workload isolation, and eventually a general GPU execution plane.
+- `calico-node`
+- `calico-apiserver`
+- `calico-kube-controllers`
+- `calico-typha`
+- Goldmane / Whisker flow-log and observability components
 
-## Relationship to a future GPU execution platform
+Application-specific network policies live with the workloads.
 
-This project can also serve as a small experimental workload for a more general GPU execution architecture.
+------
+
+### GPU support
+
+The NVIDIA GPU Operator/device plugin exposes one GPU resource per GPU worker:
+
+```text
+node1: nvidia.com/gpu = 1
+node2: nvidia.com/gpu = 1
+node3: nvidia.com/gpu = 1
+```
+
+An important constraint of this lab is that a physical GPU is currently treated as a single schedulable Kubernetes GPU resource.
+
+The two 16 GiB GPUs are **not combined into a virtual 32 GiB GPU**.
+
+This has direct consequences for workload placement.
+
+For example, two independent Pods each requesting:
+
+```text
+nvidia.com/gpu: 1
+```
+
+cannot normally be scheduled onto the same physical GPU.
+
+This is why STT and TTS are currently colocated in one Pod on `node3`.
+
+------
+
+### Storage
+
+Longhorn is installed for replicated block storage.
+
+Current StorageClasses include:
+
+```text
+local-ssd
+longhorn
+longhorn-static
+```
+
+The speech workloads currently use node-local storage for model caches where low latency is more important than replicated storage.
+
+Longhorn remains available for workloads that require persistent replicated storage.
+
+See:
+
+- `docs/longhorn-setup.md`
+- `docs/deployment.md`
+
+for details.
+
+------
+
+### Local container registry
+
+The cluster uses a local Docker Registry running directly on `node0`.
+
+```text
+node0
+  │
+  └── docker-registry
+          │
+          └── local-registry:5000
+```
+
+The registry is intentionally outside Kubernetes.
+
+This mimics on-prem / air-gapped environment where cluster nodes can't pull images from internet (public registries).
+
+Images are mirrored into the local registry before deployment - see images list in [mirror-images.sh] (scripts/mirror-images.sh).
+
+------
+
+# Current workload placement
+
+The current placement is:
+
+```text
+node0
+└── Kubernetes control plane
+    └── local container registry
+
+node1 - GTX 1650 / 4 GiB
+└── speech gateway
+    └── MCP server
+    └── SearXNG
+
+node2 - RTX 4060 Ti / 16 GiB
+└── speech-llm
+    └── llama.cpp
+
+node3 - RTX 5060 Ti / 16 GiB
+└── speech-stt
+    └── Parakeet / nano-parakeet
+└── speech-tts
+    └── Qwen3-TTS
+```
+
+The STT and TTS services share the GPU in the same Pod.
+
+This is a deliberate Kubernetes scheduling experiment rather than an architectural claim that STT and TTS should always be colocated.
+
+------
+
+# Voice demo
+
+The primary user interface is a browser-based voice chat.
+
+After deployment, it is available at:
+
+```text
+https://<node-ip>:30443/
+```
+For example https://192.168.10.31:30443/
+
+The browser communicates with the gateway over HTTPS/WSS.
+
+The demo provides:
+
+1. microphone input
+2. speech detection
+3. speech-to-text
+4. LLM reasoning
+5. optional MCP tool calls
+6. text-to-speech
+7. audio playback
+
+A complete voice round trip has been verified:
+
+```text
+  Microphone
+      ↓
+  Browser
+      ↓
+  speech-gateway
+      ↓
+     STT
+      ↓
+     LLM
+      ↓
+     TTS
+      ↓
+   Browser
+      ↓
+   Speaker
+```
+
+------
+
+# MCP experiment
+
+One of the most useful additions to the project is a small local MCP server.
+
+The goal is to experiment with what happens when a voice assistant can use real tools instead of only generating text.
+
+The current MCP server exposes two tools:
+
+```text
+local_time
+global_internet_search
+```
+
+The architecture is:
+
+```text
+                 Voice
+                   │
+                   ▼
+              Browser demo
+                   │
+                   ▼
+                  LLM
+                   │
+             tool selection
+                   │
+          ┌────────┴────────┐
+          │                 │
+          ▼                 ▼
+     local_time       internet_search
+          │                 │
+          │              SearXNG
+          │                 │
+          └────────┬────────┘
+                   ▼
+               tool result
+                   │
+                   ▼
+                  LLM
+                   │
+                   ▼
+                  TTS
+                   │
+                   ▼
+                 Voice
+```
+
+The search path uses a self-hosted SearXNG instance.
+
+No external search API key is required for the local search experiment.
+
+The important architectural property is that the speech gateway does not need to become an MCP framework.
+
+Tool execution is handled by the client/demo according to the tool-calling model exposed by the voice protocol.
+
+This keeps the speech gateway focused on speech processing.
+
+See:
+
+- `speech-mcp/README.md`
+- `mcp/speech-mcp-mcp-experiment-proposal.md`
+
+------
+
+# Why MCP matters for the future
+
+The MCP experiment is intentionally small, but it points toward a much more interesting future use case.
+
+A future Synanton voice assistant could potentially use tools to interact with the platform:
+
+```text
+"How many GPU workers are available?"
+
+"Is node3 healthy?"
+
+"Show me running inference workloads."
+
+"Restart the failed extractor."
+
+"How much GPU capacity is available?"
+
+"Why is this document still processing?"
+
+"Start reprocessing the failed audio."
+
+"Search my knowledge base for..."
+```
+
+The voice interface would not need to know how Kubernetes, GPU scheduling, content extraction, search, or platform APIs work.
+
+Instead:
+
+```text
+      Voice
+        ↓
+ Speech processing
+        ↓
+  LLM / agent
+        ↓
+  MCP / platform tools
+        ↓
+  Synanton platform
+```
+
+This repository therefore provides a useful experimental front end for future voice interaction with:
+
+- [`synanton/platform`](https://github.com/synanton/platform)
+- [`synanton/content_extractor`](https://github.com/synanton/content_extractor)
+- [`synanton/gpu-runtime`](https://github.com/synanton/gpu-runtime)
+
+------
+
+# Relationship to Synanton
+
+This repository is intentionally separate from Synanton.
+
+It is a **workload laboratory**, not another Synanton service.
+
+The experiments here are expected to inform three future areas.
+
+## 1. Synanton Content Extractor
+
+The speech pipeline provides a practical environment for experimenting with audio processing:
+
+```text
+          Audio
+            ↓
+           STT
+            ↓
+ speaker / timing information
+            ↓
+ structured transcript
+            ↓
+ annotations / derived knowledge
+```
+
+Potential future extraction capabilities include:
+
+- transcription
+- speaker turns
+- pauses
+- overlapping speech
+- timestamps
+- language detection
+- summaries
+- semantic segments
+- derived metadata
+
+These capabilities can eventually feed the Synanton structured content extraction plane.
+
+------
+
+## 2. Synanton GPU Runtime
+
+This repository is also a real heterogeneous GPU workload for experimenting with GPU execution.
 
 Today:
 
 ```text
-S2S Gateway
-   ├── HTTP → STT
-   ├── HTTP → LLM
-   └── HTTP → TTS
+Gateway
+   │
+   ├── STT
+   ├── LLM
+   └── TTS
 ```
 
-A future execution layer could become:
+A future GPU runtime could abstract the execution layer:
 
 ```text
-S2S Gateway
+Voice workload
       │
       ▼
-GPU Execution API
+GPU Runtime API
       │
       ▼
 Scheduler
@@ -330,151 +521,417 @@ Scheduler
  STT LLM TTS
 ```
 
-The scheduler could eventually make placement decisions using:
+The scheduler could eventually consider:
 
-- required model
-- GPU VRAM
+- model requirements
+- VRAM requirements
 - GPU type
-- current utilization
+- current GPU utilization
 - queue depth
-- execution class
+- workload priority
 - latency requirements
+- execution class
+- locality
 
-This repository is deliberately small enough to experiment with those ideas without first building a complete GPU platform.
+This repository provides a concrete workload against which such a runtime can be tested.
 
-## Project status
+------
 
-This is an **experimental home-lab project**.
+## 3. Synanton Platform voice assistants
 
-It should be considered:
+The longer-term goal is to make voice another interface to the Synanton platform.
 
-- useful for learning and prototyping
-- useful for testing distributed GPU workloads
-- useful for evaluating model/runtime combinations
-- useful as a sandbox for Kubernetes inference experiments
-
-It should **not** currently be considered:
-
-- a production S2S platform
-- a highly available inference service
-- a benchmark representing datacenter hardware
-- a general-purpose GPU scheduler
-
-The cluster itself is part of the experiment.
-
-### Verified so far
-
-- `speech-llm` confirmed `Running`/`Ready` and smoke-tested on `node2`
-  (`/health` OK, chat completion returned real output). VRAM: 8.7GB/16GB.
-- `speech-stt` and `speech-tts` colocated in one Pod on `node3`
-  (`k8s/stt/deployment-colocated-with-tts.yaml`), confirmed `2/2 Running`,
-  and smoke-tested **concurrently** - both succeeded at the same time on
-  the shared GPU. Combined VRAM: 6.8GB/16GB, comfortable headroom.
-- **Full end-to-end voice round trip confirmed working in a real browser**:
-  `speech-gateway` + the browser voice-chat demo (`speech-demo`) + Traefik
-  (TLS, self-signed cert) - mic in, transcript out, LLM reply, and
-  synthesized **voice audibly heard**, over `wss://` through the Ingress.
-  Voice selection in the demo's UI (Aiden/Ryan/Dylan/Eric/Ono_Anna/Serena/
-  Sohee/Uncle_Fu/Vivian - Qwen3-TTS-CustomVoice's real presets) also works.
-- Not yet done: the LLM+TTS colocation alternative ("Option B" shape) and
-  latency/TTFA measurements.
-
-See [`docs/deployment.md`](docs/deployment.md#status-2026-09-09) for the
-detailed status and [`docs/benchmarks.md`](docs/benchmarks.md) for the
-recorded VRAM numbers.
-
-## Future actions
-
-The GitHub issue tracker is the working backlog for the next experiments and improvements. The current backlog contains **11 open issues**, covering the path from basic GPU/service validation through observability, benchmarking, security, packaging, and developer tooling. See the [open issues](https://github.com/andreminin/speech-to-speech-k8s/issues).
-
-The intended order is roughly:
-
-### Phase 1 — get every inference component working
-
-- **STSK8-001** — deploy and validate the `speech-llm` component on a GPU node.
-- **STSK8-002** — deploy and validate `speech-stt` and `speech-tts` on GPU nodes.
-- **STSK8-003** — validate Kubernetes Cluster DNS and service-to-service HTTP communication.
-
-These issues establish the basic distributed execution primitives before attempting the complete S2S path.
-
-### Phase 2 — prove the complete pipeline
-
-- **STSK8-004** — run the full end-to-end smoke test across the gateway, STT, LLM, and TTS components.
-- **STSK8-005** — add structured error handling and retry logic for HTTP timeouts.
-
-The goal is to move from independently working services to a reliable distributed request path:
+The desired separation is:
 
 ```text
-Gateway → STT → LLM → TTS → Gateway
+                 Voice Assistant
+                       │
+              ┌────────┴────────┐
+              │                 │
+           speech             tools
+              │                 │
+              ▼                 ▼
+       Content/Voice       Synanton APIs
+        Processing              │
+              │                 │
+              └────────┬────────┘
+                       ▼
+                Synanton Platform
 ```
 
-### Phase 3 — make the experiment measurable
+The voice assistant should not directly become the platform.
 
-- **STSK8-006** — add persistent logging and a `kubectl logs` parsing/debugging guide.
-- **STSK8-007** — deploy Prometheus + GPU exporter for real-time VRAM and GPU metrics.
-- **STSK8-008** — perform initial latency benchmarking and document the results in `docs/benchmarks.md`.
+It should be another client/interface that uses platform capabilities through well-defined APIs and tools.
 
-This phase is particularly important because the purpose of the lab is experimentation. We need measurements for VRAM usage, GPU utilization, model loading, network latency, STT latency, LLM TTFT, TTS TTFA, and end-to-end TTFA before making architectural decisions.
+------
 
-### Phase 4 — improve deployment ergonomics and security
+# Repository structure
 
-- **STSK8-009** — package the Kubernetes manifests as Helm charts.
-- **STSK8-010** — harden service-to-service communication with mTLS or API-key authentication.
+The repository is intentionally divided into small components:
 
-These are deliberately after the basic pipeline works. The project is a sandbox, so deployment and security complexity should follow demonstrated requirements rather than precede them.
+```text
+.
+├── gateway/                 # speech-to-speech gateway
+├── stt/                     # STT service
+├── tts/                     # TTS service
+├── llm/                     # LLM service configuration
+├── speech-mcp/              # local MCP server
+├── demo/                    # browser voice demo
+├── k8s/                     # Kubernetes manifests
+├── scripts/                 # deployment and test helpers
+├── docs/
+│   ├── architecture.md
+│   ├── deployment.md
+│   ├── troubleshooting.md
+│   ├── benchmarks.md
+│   ├── observability.md
+│   └── longhorn-setup.md
+└── mcp/
+    └── speech-mcp-mcp-experiment-proposal.md
+```
 
-### Phase 5 — improve the developer experience
+The service wrappers are intentionally thin.
 
-- **STSK8-011** — add a `--watch` / interactive live-tail script for easier debugging.
+They should adapt existing speech/inference components to Kubernetes rather than evolve into a second speech orchestration framework.
 
-This should make iterative experiments on the home cluster considerably faster.
+------
 
-### Beyond the current backlog
+# Quick start
 
-After the current issues are complete, the next architectural experiments are likely to be:
+## Check the cluster
 
-1. Compare TTS placement:
-   - node2: STT + TTS, node3: LLM
-   - node2: STT, node3: LLM + TTS
-2. Measure concurrency and determine practical GPU capacity.
-3. Investigate true streaming across service boundaries.
-4. Compare the current HTTP transport with streaming gRPC.
+```bash
+kubectl get nodes
+```
+
+Expected:
+
+```text
+node0   Ready
+node1   Ready
+node2   Ready
+node3   Ready
+```
+
+Check GPU resources:
+
+```bash
+kubectl get nodes \
+  -o custom-columns=NAME:.metadata.name,GPUS:.status.allocatable.nvidia\.com/gpu
+```
+
+Check system workloads:
+
+```bash
+kubectl get pods -A
+```
+
+------
+
+## Verify GPUs
+
+Run the NVIDIA smoke tests:
+
+```bash
+kubectl apply -f k8s/smoke/nvidia-smi-node1.yaml
+kubectl apply -f k8s/smoke/nvidia-smi-node2.yaml
+kubectl apply -f k8s/smoke/nvidia-smi-node3.yaml
+```
+
+Then follow:
+
+```text
+docs/deployment.md
+```
+
+for the complete deployment process.
+
+------
+
+## Deploy
+
+Create the registry credentials if required:
+
+```bash
+./scripts/create-registry-secret.sh
+```
+
+Deploy the application:
+
+```bash
+./scripts/install.sh
+```
+
+The installation script applies the Kubernetes manifests and waits for the required rollouts.
+
+------
+
+## Run the MCP smoke test
+
+```bash
+./scripts/smoke-test.sh mcp
+```
+
+This validates the local MCP tools independently of the browser interaction.
+
+------
+
+## Open the voice demo
+
+Open:
+
+```text
+https://<node-ip>:30443/
+```
+
+The first visit may require accepting the self-signed TLS certificate.
+
+The browser needs microphone permission.
+
+------
+
+## Clean up
+
+```bash
+./scripts/cleanup.sh
+```
+
+This removes the application namespace and related cluster-scoped resources.
+
+Node-local model caches are intentionally left in place.
+
+------
+## K8S cluster stop and start scripts
+
+To safely quiesce the cluster before powering the nodes off (planned reboot):
+```bash
+scripts/cluster-stop.sh
+```
+
+To bring cluster back into service after the nodes have rebooted:
+```bash
+scripts/cluster-start.sh
+```
+
+------
+
+# Troubleshooting
+
+Start with:
+
+```
+docs/troubleshooting.md
+```
+
+The recommended debugging order is deliberately infrastructure-first:
+
+```text
+1. Kubernetes nodes Ready?
+          ↓
+2. Network connectivity?
+          ↓
+3. NVIDIA GPU visible?
+          ↓
+4. nvidia-smi Pod works?
+          ↓
+5. Container image available?
+          ↓
+6. GPU resource schedulable?
+          ↓
+7. Model starts?
+          ↓
+8. Service health endpoint works?
+          ↓
+9. STT / LLM / TTS behavior
+          ↓
+10. End-to-end voice behavior
+```
+
+This ordering matters in a home lab.
+
+A powered-off worker, broken kubelet, missing image, or unavailable GPU can look like an application problem even though the application never actually started.
+
+------
+
+# What has been verified
+
+The following has been demonstrated on the current cluster:
+
+### LLM
+
+`speech-llm` runs successfully on `node2`.
+
+Current observed VRAM usage:
+
+```text
+~8.7 GiB / 16 GiB
+```
+
+### STT + TTS
+
+STT and TTS run concurrently in one Pod on `node3`.
+
+Observed combined VRAM usage:
+
+```text
+~6.8 GiB / 16 GiB
+```
+
+This leaves substantial headroom on the 16 GiB GPU.
+
+### End-to-end voice
+
+A real browser session has successfully completed:
+
+```text
+  microphone
+     ↓
+    STT
+     ↓
+    LLM
+     ↓
+    TTS
+     ↓
+   speaker
+```
+
+### MCP
+
+The browser demo can invoke the local MCP tools and incorporate their results into the voice conversation.
+
+Verified tools:
+
+```text
+local_time
+global_internet_search
+```
+
+------
+
+# What has not been optimized yet
+
+The project is working, but several important experiments remain.
+
+## Streaming
+
+The current pipeline is primarily turn-oriented:
+
+```text
+     audio
+       ↓
+      STT
+       ↓
+   transcript
+       ↓
+      LLM
+       ↓
+    response
+       ↓
+      TTS
+       ↓
+     audio
+```
+
+The desired future architecture is:
+
+```text
+   audio chunks
+       ↓
+  streaming STT
+       ↓
+ partial transcript
+       ↓
+  streaming LLM
+       ↓
+  text chunks
+       ↓
+  streaming TTS
+       ↓
+  audio chunks
+```
+
+------
+
+## GPU placement
+
+SST abd TTS located on one GPU
+
+```text
+Experiment A
+
+node2: LLM
+node3: STT + TTS
+```
+
+------
+
+## Latency
+
+Important measurements include:
+
+- network latency
+- STT latency
+- LLM time-to-first-token
+- TTS time-to-first-audio
+- end-to-end time-to-first-audio
+- total turn latency
+- MCP tool-call overhead
+
+------
+
+# Future experiments
+
+The project is likely to evolve through experiments in this order:
+
+1. Improve observability and measure voice latency.
+2. Measure STT / LLM / TTS resource usage.
+3. Benchmark the alternative GPU placements.
+4. Measure MCP tool-call latency.
 5. Add cancellation / barge-in propagation.
-6. Experiment with more explicit GPU workload scheduling.
-7. Evaluate integration with a general GPU execution layer.
-8. **MCP (Model Context Protocol) support** — **done, wired into the
-   voice pipeline**: a small Go `speech-mcp` server runs on `node1`
-   (CPU-only, alongside the gateway) exposing two tools over MCP —
-   `local_time` and `global_internet_search` (backed by a self-hosted,
-   open-source SearXNG instance, `k8s/searxng/` — no API key/account
-   needed). A spoken question can trigger a real tool call: the browser
-   demo (`demo/main.js`'s `TOOL_DEFS`/`runTool`, proxied by
-   `demo/server.py`'s `/api/mcp/call` route) executes both tools
-   client-side — `speech-gateway` itself is untouched, since tool
-   execution is the client's responsibility under the OpenAI Realtime
-   protocol it implements. Verified directly via
-   `./scripts/smoke-test.sh mcp`. See
-   [`speech-mcp/README.md`](speech-mcp/README.md) for how to run/test it
-   and the full proposal at
-   [`mcp/speech-mcp-mcp-experiment-proposal.md`](mcp/speech-mcp-mcp-experiment-proposal.md)
-   for the tool set, security model, and benchmark plan (does the extra
-   LLM round-trip for tool calls actually earn its latency cost? —
-   not yet measured).
+6. Investigate true streaming between inference services.
+7. Compare HTTP with streaming gRPC.
+8. Measure concurrent sessions.
+9. Experiment with more explicit GPU workload scheduling.
+10. Investigate integration with a generic GPU execution runtime.
+11. Use audio processing experiments to inform the Synanton content extraction plane.
 
-The key principle remains:
+------
 
-> **Measure first, optimize second.**
+# Related projects
 
-The home lab is intentionally small and heterogeneous. That makes it a useful sandbox for discovering where distributed inference actually needs more sophisticated scheduling, streaming, observability, or resource management.
+This project is part of a larger set of experiments:
 
-## Documentation
+- [Synanton Platform](https://github.com/synanton/platform) - platform and knowledge infrastructure
+- [Synanton Content Extractor](https://github.com/synanton/content_extractor) - structured content extraction, including future audio processing
+- [Synanton GPU Runtime](https://github.com/synanton/gpu-runtime) - future GPU execution/runtime experiments
+- [Hugging Face speech-to-speech](https://github.com/huggingface/speech-to-speech) - upstream speech-to-speech pipeline used by this project
 
-- [`docs/proposal.md`](docs/proposal.md) — original design proposal and motivation
-- [`docs/architecture.md`](docs/architecture.md) — current as-built architecture
-- [`docs/deployment.md`](docs/deployment.md) — deployment procedure
-- [`docs/troubleshooting.md`](docs/troubleshooting.md) — infrastructure and application troubleshooting
-- [`docs/benchmarks.md`](docs/benchmarks.md) — benchmark results
-- [`docs/observability.md`](docs/observability.md) — observability notes
+------
+
+# Documentation
+
+Additional documentation:
+
+- `docs/architecture.md` - current architecture
+- `docs/deployment.md` - deployment procedure
+- `docs/troubleshooting.md` - troubleshooting
+- `docs/benchmarks.md` - benchmark results
+- `docs/observability.md` - observability
+- `docs/longhorn-setup.md` - Longhorn installation and troubleshooting
+- `speech-mcp/README.md` - MCP server
+- `mcp/speech-mcp-mcp-experiment-proposal.md` - MCP experiment design
+
+------
+
+# Project status
+
+**Experimental / learning project - working end-to-end demo.**
+
+The most important milestone has been reached:
+
+> **A voice conversation can run through the home Kubernetes cluster and use local tools through MCP.**
+
+------
 
 ## License
 
