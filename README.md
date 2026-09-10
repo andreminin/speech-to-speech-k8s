@@ -256,11 +256,8 @@ Useful experiments include:
 ### GPU placement
 
 ```text
-A: node2 = STT + TTS
-   node3 = LLM
-
-B: node2 = STT
-   node3 = LLM + TTS
+A: node2 = LLM
+   node3 = STT + TTS
 ```
 
 ### Latency
