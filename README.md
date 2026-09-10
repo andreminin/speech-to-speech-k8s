@@ -411,38 +411,23 @@ The MCP experiment is intentionally small, but it points toward a much more inte
 A future Synanton voice assistant could potentially use tools to interact with the platform:
 
 ```text
-"How many GPU workers are available?"
+"How ontologies are available?"
 
-"Is node3 healthy?"
+"Is index storage abc healthy?"
 
 "Show me running inference workloads."
 
-"Restart the failed extractor."
+"Restart the failed content extractor."
 
 "How much GPU capacity is available?"
 
-"Why is this document still processing?"
+"Why is documents batch ABC still processing?"
 
-"Start reprocessing the failed audio."
+"Start reprocessing the failed audio badge."
 
 "Search my knowledge base for..."
 ```
 
-The voice interface would not need to know how Kubernetes, GPU scheduling, content extraction, search, or platform APIs work.
-
-Instead:
-
-```text
-      Voice
-        ↓
- Speech processing
-        ↓
-  LLM / agent
-        ↓
-  MCP / platform tools
-        ↓
-  Synanton platform
-```
 
 This repository therefore provides a useful experimental front end for future voice interaction with:
 
