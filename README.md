@@ -97,10 +97,6 @@ The exact TTS placement is intentionally experimental:
 Option A:
   node2 = STT + TTS
   node3 = LLM
-
-Option B:
-  node2 = STT
-  node3 = LLM + TTS
 ```
 
 Kubernetes GPU scheduling treats a GPU as a device resource (`nvidia.com/gpu: 1`), not as an arbitrary amount of VRAM. Therefore two independent pods requesting one GPU cannot simply share the same physical GPU under the normal device-plugin model. When STT and TTS need to share one GPU, they can be colocated in the same workload.
