@@ -52,18 +52,54 @@ All components deployed and individually verified:
   open (a fixed prompt, unrelated to anything the user says), not a pipeline
   bug. Disabled it (`STARTUP_GREETING: ""` in `k8s/demo/deployment.yaml`) so
   the first reply is always an actual answer.
-  **Open issue**: mic input and text output both confirmed working (the
-  user's speech is transcribed and answered correctly), but synthesized
-  **audio is not heard** in the browser. Backend proven innocent - a raw
-  scripted WebSocket client against the same session receives real
-  `response.output_audio.delta` events with substantial PCM16 payloads, so
-  the gateway→TTS pipeline genuinely produces and sends audio; this is a
-  browser-client-side issue (the SDK's `_onAudio` callback simply never
-  fires). **Debugging session paused mid-investigation** - see "Next: voice
-  output in the browser (open issue - suspended mid-debug)" below for the
-  full diagnosis, what's still deployed (`speech-demo:debug2`, with
-  temporary debug logging), and the next concrete step to try when
-  resuming.
+  **RESOLVED - voice audio now confirmed audible in the browser.** The
+  browser SDK's `_onAudio` callback was never firing despite the backend
+  correctly sending `response.output_audio.delta` events (see "Next: voice
+  output in the browser" below for the full trace of that investigation) -
+  this stopped reproducing once a home-lab network issue was fixed (a
+  workstation NIC left on DHCP instead of static, causing IP churn that
+  rippled into node2/node3 kubelet flapping - see the pod-storm incident
+  note further down). Correlation, not a proven single root cause, but the
+  symptom has not recurred since. If it ever comes back, resume from that
+  section's decision tree.
+- **Voice selection bug found and fixed**: the demo's UI lets you pick a
+  voice (Aiden/Ryan/Dylan/Eric/Ono_Anna/Serena/Sohee/Uncle_Fu/Vivian -
+  Qwen3-TTS-CustomVoice's real built-in presets), but `tts/app/main.py` only
+  ever allowlisted `["aiden"]` (a side effect of the earlier voice-casing
+  fix), so every voice except Aiden silently fell back to Aiden. Two parts
+  to the fix:
+  1. `tts/app/main.py`: `AVAILABLE_VOICES` now defaults to all 9 real
+     presets, matched case-insensitively; only falls back to the default
+     voice for a genuinely unrecognized name now (logged as
+     `voice_fallback` when it happens). `tts/Dockerfile`'s baked-in
+     `TTS_VOICES=aiden` default updated too.
+  2. **The actual blocker in practice**: `k8s/stt/deployment-colocated-with-tts.yaml`
+     explicitly sets `TTS_VOICES` as a container env var, which overrides
+     whatever the image/code defaults to - it still said `"aiden"` alone
+     even after fixing the code, so voice selection kept silently failing
+     until that env var was updated too (now lists all 9 presets
+     explicitly, with a comment explaining why, so this doesn't quietly
+     regress again).
+
+  Along the way, rebuilding `speech-tts` at all (unrelated to this fix -
+  triggered by any `COPY app ./app` layer change) exposed a **separate,
+  unrelated dependency-drift bug**: `tts/pyproject.toml` never pinned
+  `transformers` (a transitive dep via `faster-qwen3-tts`), so a fresh
+  `pip install .` picked up `transformers` 5.17.0 instead of the
+  previously-working 5.16.1, and 5.17.0's `MimiConfig` refactor broke
+  `qwen_tts`'s RoPE compat shim (`AttributeError: 'MimiConfig' object has
+  no attribute 'rope_theta'`) - the model failed to load at all. Fixed by
+  pinning `transformers==5.16.1` in `tts/pyproject.toml`. Final working
+  image: `speech-tts:voicefix6`.
+- **`speech-demo` is back on the clean `v1` image tag** (not the
+  `debug2` build used during the audio investigation - see below).
+- New `scripts/install.sh` / `scripts/cleanup.sh` - one-command bring-up
+  (applies every manifest via `deploy.sh`, waits for rollouts, prints
+  access URLs) and tear-down (deletes the `speech` namespace plus
+  Traefik's cluster-scoped RBAC/IngressClass; node-local model caches are
+  untouched). `scripts/deploy.sh`'s `stt`/`tts` phases were also fixed to
+  apply the colocated manifest that's actually running, instead of the
+  stale standalone `k8s/stt/deployment.yaml` + `k8s/tts/deployment.yaml`.
 
 Standalone `speech-stt`/`speech-tts` Deployments+Services
 (`k8s/stt/deployment.yaml`, `k8s/tts/deployment.yaml`) are **not applied** -
@@ -71,8 +107,12 @@ replaced by the colocated `speech-stt-tts` Deployment, whose Services reuse
 the same names so nothing else had to change. Restore the standalone
 manifests if colocation ever needs to be abandoned.
 
-Not yet done: the LLM+TTS co-location benchmark, latency/TTFA
-measurements, and the manual end-to-end browser voice test.
+Not yet done: the LLM+TTS co-location benchmark and latency/TTFA
+measurements. The full end-to-end browser voice test (mic → transcript →
+LLM → audible synthesized speech) is now done - see "Voice output in the
+browser" below for the (resolved) investigation and
+`docs/troubleshooting.md` for the DHCP/node-flapping incident that
+coincided with it.
 
 ## Phase A0 - Cluster health
 
@@ -479,14 +519,25 @@ Steps:
 7. Manual verification (needs a human with a mic on the LAN - not
    scriptable): open `https://<node-ip>:30443/`, accept the self-signed
    cert warning once per device, click the orb, speak, confirm the transcript
-   + LLM reply + synthesized audio all round-trip. **Done for mic input and
-   text; audio playback still open - see next section.**
+   + LLM reply + synthesized audio all round-trip. **Done - full round trip
+   including audible synthesized speech confirmed working.**
 
-## Next: voice output in the browser (open issue - suspended mid-debug)
+## Voice output in the browser (RESOLVED)
 
-**Session paused here on 2026-09-09 - resume by reading this section before
-continuing.** Mic input works, text/transcript output works reliably, but
-synthesized speech is still not heard even on a clean, uninterrupted turn.
+**Update: resolved.** Full voice round trip (mic → transcript → LLM →
+audible synthesized speech) now confirmed working in a real browser, voice
+selection included. The investigation below is kept as a record - the
+symptom stopped reproducing once a home-lab network issue (a workstation
+NIC left on DHCP, causing IP churn that rippled into node2/node3 kubelet
+flapping - see `docs/troubleshooting.md`) was fixed, but that's a
+correlation observed during debugging, not a proven single root cause -
+if the symptom (`_onAudio` never firing despite the backend correctly
+sending `response.output_audio.delta`) ever recurs, resume from "Next
+debugging step" below.
+
+Original framing while this was still open: mic input worked,
+text/transcript output worked reliably, but synthesized speech was not
+heard even on a clean, uninterrupted turn.
 
 ### Found and fixed along the way (real bugs, keep these)
 
@@ -552,24 +603,20 @@ vendored into this repo, except `demo/Dockerfile`):
     up again; not investigated further since Chrome (current code) shows
     a cleaner, different symptom.
 
-### Current deployed state (debug instrumentation still live)
+### Debug instrumentation used (now rolled back)
 
-- `k8s/demo/deployment.yaml` currently points at
-  `local-registry:5000/speech-demo:debug2` - **not** the clean `v1` tag.
-  This image has two harmless temporary `console.log` lines (module-load
-  confirmation + `_onAudio` entry logging) patched into a local copy of
-  `demo/s2s-realtime-client.js` inside the checkout at
-  `/home/aminin/workspace/huggingface/speech-to-speech/demo/` (that local
-  checkout, not this repo, currently has the patch + a bumped cache-bust
-  version string `debug2` in `index.html`/`main.js`/`s2s-realtime-client.js`
-  - a backup of the original is at `s2s-realtime-client.js.orig` in that
-  checkout). None of this is committed anywhere - it's local, throwaway
-  debugging state.
-- To resume: keep testing against `debug2`, or roll back to `v1`
-  (`kubectl -n speech set image deployment/speech-demo speech-demo=local-registry:5000/speech-demo:v1`)
-  if you want a clean, unstinstrumented demo in the meantime.
+`k8s/demo/deployment.yaml` briefly pointed at
+`local-registry:5000/speech-demo:debug2` (two temporary `console.log`
+lines - module-load confirmation + `_onAudio` entry logging - patched
+into a local copy of `demo/s2s-realtime-client.js` in the upstream
+checkout, never committed anywhere). **Rolled back to the clean `v1` tag**
+now that the investigation is resolved. If reproducing this again, the
+patch pattern (and a leftover `s2s-realtime-client.js.orig` backup) is
+still in `/home/aminin/workspace/huggingface/speech-to-speech/demo/` on
+the machine this was debugged from - or just redo it fresh from this
+section's description.
 
-### Next debugging step when resuming
+### Next debugging step if this recurs
 
 Since `_onAudio` itself never fires, the next-most-direct check is one
 level up: `s2s-realtime-client.js` also has a raw catch-all

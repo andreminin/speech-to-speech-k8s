@@ -32,7 +32,16 @@ logger = logging.getLogger("speech-tts")
 MODEL_NAME = os.environ.get("TTS_MODEL_NAME", DEFAULT_MODEL_NAME)
 DEVICE = os.environ.get("TTS_DEVICE", "cuda")
 BACKEND = os.environ.get("TTS_BACKEND", "ggml")
-AVAILABLE_VOICES = os.environ.get("TTS_VOICES", "aiden").split(",")
+# Qwen3-TTS-CustomVoice's real built-in presets (matches the demo's own
+# voice dropdown, demo/index.html's <select id="voice">) - the model
+# supports all of these, not just "aiden". Case-insensitive lookup below
+# because the client (browser SDK) sends whatever casing it likes (we've
+# already been bitten once by "Aiden" vs "aiden" mismatching an exact-match
+# check).
+AVAILABLE_VOICES = os.environ.get(
+    "TTS_VOICES", "Aiden,Ryan,Dylan,Eric,Ono_Anna,Serena,Sohee,Uncle_Fu,Vivian"
+).split(",")
+_VOICE_LOOKUP = {v.strip().lower(): v.strip() for v in AVAILABLE_VOICES}
 
 tts = Qwen3TTS(model_name=MODEL_NAME, device=DEVICE, backend=BACKEND)
 
@@ -76,13 +85,12 @@ async def voices():
 async def synthesize(body: SpeechRequest, request: Request):
     # The gateway's realtime session lets the client (the browser SDK)
     # override the voice per-turn (see openai_compatible_handler.py's
-    # _resolve_voice) - it defaults to a standard OpenAI voice name (e.g.
-    # "alloy") unrelated to whatever this server actually has loaded. This
-    # deployment only ever has one real voice available, so silently fall
-    # back to it instead of 400ing every turn that doesn't happen to name
-    # it explicitly - matches what a single-voice TTS model can actually do.
-    voice = body.voice if body.voice in AVAILABLE_VOICES else AVAILABLE_VOICES[0]
-    if voice != body.voice:
+    # _resolve_voice). Match case-insensitively against the real presets
+    # and use the canonical casing the model expects; only fall back to
+    # the default voice for a genuinely unrecognized name.
+    voice = _VOICE_LOOKUP.get(body.voice.strip().lower())
+    if voice is None:
+        voice = AVAILABLE_VOICES[0]
         logger.info(
             json.dumps({"component": "tts", "event": "voice_fallback", "requested": body.voice, "used": voice})
         )

@@ -195,9 +195,31 @@ kubectl apply -f k8s/smoke/nvidia-smi-node2.yaml
 kubectl apply -f k8s/smoke/nvidia-smi-node3.yaml
 ```
 
-Then follow [`docs/deployment.md`](docs/deployment.md) in order.
+Then follow [`docs/deployment.md`](docs/deployment.md) in order for a
+from-scratch walkthrough (building images, pre-downloading models, etc).
 
-For a client on the LAN, the intended entry point is:
+**Once images are built/pushed and models are pre-downloaded** (one-time,
+per `docs/deployment.md`), bring up everything else with one command:
+
+```bash
+./scripts/create-registry-secret.sh   # once, if not already done
+./scripts/install.sh                  # applies every manifest, waits for rollouts
+```
+
+and tear it all down (namespace + Traefik's cluster-scoped RBAC; node-local
+model caches under `/mnt/local-fast` are left untouched) with:
+
+```bash
+./scripts/cleanup.sh
+```
+
+The intended end-user entry point is the browser voice-chat demo:
+
+```text
+https://<any-node-ip>:30443/
+```
+(accept the self-signed certificate warning once per device - needed for
+microphone access). For a CLI client instead:
 
 ```bash
 pip install speech-to-speech
@@ -355,9 +377,14 @@ The cluster itself is part of the experiment.
   (`k8s/stt/deployment-colocated-with-tts.yaml`), confirmed `2/2 Running`,
   and smoke-tested **concurrently** - both succeeded at the same time on
   the shared GPU. Combined VRAM: 6.8GB/16GB, comfortable headroom.
-- Not yet done: the LLM+TTS colocation alternative ("Option B" shape),
-  latency/TTFA measurements, and the full gateway end-to-end round trip
-  (Phase E).
+- **Full end-to-end voice round trip confirmed working in a real browser**:
+  `speech-gateway` + the browser voice-chat demo (`speech-demo`) + Traefik
+  (TLS, self-signed cert) - mic in, transcript out, LLM reply, and
+  synthesized **voice audibly heard**, over `wss://` through the Ingress.
+  Voice selection in the demo's UI (Aiden/Ryan/Dylan/Eric/Ono_Anna/Serena/
+  Sohee/Uncle_Fu/Vivian - Qwen3-TTS-CustomVoice's real presets) also works.
+- Not yet done: the LLM+TTS colocation alternative ("Option B" shape) and
+  latency/TTFA measurements.
 
 See [`docs/deployment.md`](docs/deployment.md#status-2026-09-09) for the
 detailed status and [`docs/benchmarks.md`](docs/benchmarks.md) for the

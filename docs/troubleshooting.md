@@ -21,6 +21,85 @@ This is a physical/infrastructure issue, not something fixable from
 
 Nothing in `docs/deployment.md` will work until this is resolved.
 
+## Pod storm after a node flaps `NotReady`/`Ready` (hundreds of `UnexpectedAdmissionError` pods)
+
+Observed once (2026-09-09): a workstation's ethernet interface was left on
+DHCP instead of static, and an IP-address change on that interface
+appears to have rippled into brief connectivity loss for node2/node3 on
+the same LAN segment. Symptom: `kubectl -n speech get pods` shows **hundreds**
+of pods for a single Deployment (e.g. `speech-llm`, `speech-stt-tts`),
+almost all `0/1` or `0/2` with status `UnexpectedAdmissionError` and an
+event like:
+
+```
+Allocate failed due to no healthy devices present; cannot allocate
+unhealthy devices nvidia.com/gpu, which is unexpected
+```
+
+("no healthy devices present" - a *different*, more serious message than
+the plain GPU-contention `Requested: 1, Available: 0` case covered below;
+this one means the node's NVIDIA device plugin itself briefly reported the
+GPU as unhealthy.) What happened: while the node was flapping, its device
+plugin DaemonSet pod restarted; during that window every attempt to
+schedule the Deployment's one desired replica got admitted by the
+scheduler but then rejected by the kubelet (`UnexpectedAdmissionError`),
+and - because that rejection happens *after* scheduling, not before - the
+Deployment/ReplicaSet controller immediately created a replacement pod to
+make up the desired count, which failed the same way, in a tight loop.
+This stopped on its own once the device plugin came back healthy, but the
+dead pod objects (Kubernetes does not always garbage-collect these
+promptly) are left behind and can number in the hundreds within minutes.
+
+**Fix the actual cause first**: make sure every machine on the cluster's
+10 Gbit/s LAN segment (192.168.10.0/24) - including admin workstations,
+not just node0-node3 - has a **static** IP on that interface, not DHCP.
+Verify with `nmcli connection show <connection-name> | grep ipv4.method` -
+should say `manual`, not `auto`. Fix with e.g.:
+```bash
+sudo nmcli connection modify <connection-name> ipv4.method manual ipv4.addresses <ip>/24
+sudo nmcli connection up <connection-name>
+```
+
+**Then clean up the dead pod objects** (they're harmless but clutter
+`kubectl get pods`/etcd - the Deployment itself is unaffected once one
+replica is healthy again):
+```bash
+kubectl -n speech get pods -l app=<name> --no-headers \
+  | awk '$3!="Running" {print $1}' \
+  | xargs -n 50 kubectl -n speech delete pod --wait=false --grace-period=0 --force
+```
+Confirm the storm has actually stopped (no new `UnexpectedAdmissionError`
+events in the last few minutes) before deleting - otherwise you're just
+racing a still-active storm. `scripts/cleanup.sh` does *not* handle this
+(it tears down the whole deployment); this is a narrower, non-destructive
+cleanup for exactly this situation.
+
+## `speech-tts` model fails to load after an unrelated rebuild (`AttributeError: 'MimiConfig' object has no attribute 'rope_theta'`)
+
+Observed once (2026-09-09) rebuilding `speech-tts` for an unrelated
+`app/main.py` change. Full traceback bottoms out in
+`qwen_tts/_transformers_compat.py` reading `config.rope_theta` on a
+`MimiConfig` that no longer has it. Cause: `tts/pyproject.toml` doesn't
+pin `transformers` (it's a transitive dependency via
+`faster-qwen3-tts[ggml]`), so any rebuild that invalidates the `pip
+install .` Docker layer - even one with zero dependency changes - re-resolves
+whatever is currently newest on PyPI. `transformers` 5.17.0 refactored
+`MimiConfig`'s RoPE parameters in a way `qwen_tts`'s compat shim doesn't
+handle, breaking model load entirely (not a runtime error - the container
+never becomes healthy).
+
+Diagnose by comparing the installed version between a known-working image
+and the broken one:
+```bash
+docker run --rm <working-image> python3 -c "import transformers; print(transformers.__version__)"
+docker run --rm <broken-image> python3 -c "import transformers; print(transformers.__version__)"
+```
+Fix: pin the working version in `tts/pyproject.toml` (`transformers==5.16.1`
+as of this writing) and rebuild. This class of bug can recur for any other
+unpinned transitive dependency in `tts/pyproject.toml` or `stt/pyproject.toml`
+- pin anything a future `pip install` breaking-change release could plausibly
+touch, not just this one.
+
 ## GPU visibility
 
 `kubectl get nodes` returns

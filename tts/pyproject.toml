@@ -9,6 +9,13 @@ dependencies = [
   "numpy",
   "soundfile",
   "faster-qwen3-tts[ggml]>=0.4.0",
+  # Pinned: transformers 5.17.0 refactored MimiConfig's RoPE params and
+  # broke qwen_tts's compat shim (_transformers_compat.py) with
+  # `AttributeError: 'MimiConfig' object has no attribute 'rope_theta'`.
+  # Without a lockfile, an unrelated rebuild (no pyproject.toml change at
+  # all) picked up 5.17.0 fresh from PyPI and broke model loading - pin
+  # until qwen_tts/faster-qwen3-tts catches up.
+  "transformers==5.16.1",
 ]
 
 [build-system]

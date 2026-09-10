@@ -94,7 +94,7 @@ spec:
             periodSeconds: 20
             failureThreshold: 3
         - name: speech-tts
-          image: local-registry:5000/speech-tts:voicefix4
+          image: local-registry:5000/speech-tts:voicefix6
           imagePullPolicy: IfNotPresent
           env:
             - name: TTS_MODEL_NAME
@@ -103,6 +103,14 @@ spec:
               value: "cuda"
             - name: TTS_BACKEND
               value: "torch"
+            # Explicit here rather than relying on tts/Dockerfile's ENV
+            # default - the demo's voice dropdown offers all of these
+            # (Qwen3-TTS-CustomVoice's real built-in presets), and an
+            # implicit single-voice default has already silently masked
+            # voice selection once (see docs/deployment.md's TTS voice
+            # sections).
+            - name: TTS_VOICES
+              value: "Aiden,Ryan,Dylan,Eric,Ono_Anna,Serena,Sohee,Uncle_Fu,Vivian"
             - name: HF_HUB_OFFLINE
               value: "1"
             - name: TRANSFORMERS_OFFLINE

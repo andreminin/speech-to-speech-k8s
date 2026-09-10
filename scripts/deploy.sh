@@ -26,17 +26,19 @@ llm() {
   kubectl apply -f "${K8S}/llm/service.yaml"
 }
 
-stt() {
-  echo "== speech-stt"
-  kubectl apply -f "${K8S}/stt/deployment.yaml"
-  kubectl apply -f "${K8S}/stt/service.yaml"
+# node3 has one GPU and can't co-schedule two separate GPU-requesting
+# Deployments (see docs/architecture.md "GPU scheduling constraint") - the
+# actual running setup is the colocated manifest (one Pod, two containers),
+# NOT the standalone k8s/stt/deployment.yaml + k8s/tts/deployment.yaml
+# (kept in the repo only as a reference/fallback - see that manifest's own
+# header comment). `stt` and `tts` are both aliases for the same colocated
+# apply so existing muscle-memory/docs referencing either still work.
+stt_tts() {
+  echo "== speech-stt + speech-tts (colocated on node3)"
+  kubectl apply -f "${K8S}/stt/deployment-colocated-with-tts.yaml"
 }
-
-tts() {
-  echo "== speech-tts"
-  kubectl apply -f "${K8S}/tts/deployment.yaml"
-  kubectl apply -f "${K8S}/tts/service.yaml"
-}
+stt() { stt_tts; }
+tts() { stt_tts; }
 
 gateway() {
   echo "== speech-gateway"
@@ -57,11 +59,10 @@ demo() {
 }
 
 case "${PHASE}" in
-  all) scaffolding; llm; stt; tts; gateway; traefik; demo ;;
+  all) scaffolding; llm; stt_tts; gateway; traefik; demo ;;
   scaffolding) scaffolding ;;
   llm) llm ;;
-  stt) stt ;;
-  tts) tts ;;
+  stt|tts|stt_tts) stt_tts ;;
   gateway) gateway ;;
   traefik) traefik ;;
   demo) demo ;;

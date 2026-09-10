@@ -17,7 +17,7 @@ ENV PYTHONUNBUFFERED=1 \
     TTS_MODEL_NAME=Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice \
     TTS_DEVICE=cuda \
     TTS_BACKEND=ggml \
-    TTS_VOICES=aiden \
+    TTS_VOICES=Aiden,Ryan,Dylan,Eric,Ono_Anna,Serena,Sohee,Uncle_Fu,Vivian \
     HF_HOME=/mnt/models/qwen3-tts
 
 EXPOSE 8002
