@@ -6,16 +6,16 @@ see the corresponding phase in the plan for the full rationale.
 ## Prerequisite: upstream checkout
 
 `speech-gateway` and `speech-demo` (Phase E) build directly from a checkout
-of `huggingface/speech-to-speech` rather than vendoring its code - only a
+of `andreminin/speech-to-speech` - only a
 handful of files that need a local patch are vendored (`gateway/Dockerfile`,
 `demo/Dockerfile`). `scripts/build-and-push.sh` defaults to
-`../../huggingface/speech-to-speech`, resolved relative to wherever you run
+`../speech-to-speech`, resolved relative to wherever you run
 it from - so clone it as a **sibling of this repo's parent directory**, e.g.
 if this repo is at `~/workspace/speech-to-speech-k8s`:
 
-https://github.com/andreminin/speech-to-speech project is forked https://github.com/huggingface/speech-to-speech
+https://github.com/andreminin/speech-to-speech project is forked from https://github.com/huggingface/speech-to-speech
 
-Clone https://github.com/huggingface/speech-to-speech project in the same folder as speech-to-speech-k8s:
+Clone https://github.com/andreminin/speech-to-speech project in the same folder as speech-to-speech-k8s:
 ```bash
 cd ~/workspace/
 git clone https://github.com/andreminin/speech-to-speech.git
@@ -616,7 +616,7 @@ into a local copy of `demo/s2s-realtime-client.js` in the upstream
 checkout, never committed anywhere). **Rolled back to the clean `v1` tag**
 now that the investigation is resolved. If reproducing this again, the
 patch pattern (and a leftover `s2s-realtime-client.js.orig` backup) is
-still in `/home/aminin/workspace/huggingface/speech-to-speech/demo/` on
+still in `~/workspace/speech-to-speech/demo/` on
 the machine this was debugged from - or just redo it fresh from this
 section's description.
 
