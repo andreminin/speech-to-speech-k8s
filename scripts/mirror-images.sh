@@ -29,6 +29,9 @@ declare -A IMAGES=(
   [longhorn-share-manager]="docker.io/longhornio/longhorn-share-manager:v1.12.1"
   [longhorn-ui]="docker.io/longhornio/longhorn-ui:v1.12.1"
   [traefik]="docker.io/library/traefik:v3.3"
+  [searxng]="docker.io/searxng/searxng:2026.9.8-3fdc6d753"
+  [node]="docker.io/library/node:24-slim"
+  [node]="docker.io/library/python:3.11-slim"
 )
 
 for local_name in "${!IMAGES[@]}"; do

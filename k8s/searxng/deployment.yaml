@@ -1,0 +1,73 @@
+# Self-hosted metasearch engine backing speech-mcp's
+# global_internet_search tool (see mcp/speech-mcp-mcp-experiment-proposal.md
+# and speech-mcp/README.md). Open-source, no API key/account needed -
+# it proxies queries to public search engines rather than crawling
+# itself, so it's lightweight.
+#
+# ClusterIP only - internal-only, never exposed via NodePort/Ingress.
+# Only speech-mcp is meant to call it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: searxng
+  namespace: speech
+  labels:
+    app: searxng
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: searxng
+  template:
+    metadata:
+      labels:
+        app: searxng
+    spec:
+      imagePullSecrets:
+        - name: local-registry-cred
+      containers:
+        - name: searxng
+          image: local-registry:5000/searxng:2026.9.8-3fdc6d753
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: "250m"
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: settings
+              mountPath: /etc/searxng/settings.yml
+              subPath: settings.yml
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 20
+      volumes:
+        - name: settings
+          configMap:
+            name: searxng-settings
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: searxng
+  namespace: speech
+spec:
+  type: ClusterIP
+  selector:
+    app: searxng
+  ports:
+    - port: 8080
+      targetPort: 8080

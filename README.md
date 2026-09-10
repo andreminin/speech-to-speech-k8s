@@ -449,6 +449,24 @@ After the current issues are complete, the next architectural experiments are li
 5. Add cancellation / barge-in propagation.
 6. Experiment with more explicit GPU workload scheduling.
 7. Evaluate integration with a general GPU execution layer.
+8. **MCP (Model Context Protocol) support** — **done, wired into the
+   voice pipeline**: a small Go `speech-mcp` server runs on `node1`
+   (CPU-only, alongside the gateway) exposing two tools over MCP —
+   `local_time` and `global_internet_search` (backed by a self-hosted,
+   open-source SearXNG instance, `k8s/searxng/` — no API key/account
+   needed). A spoken question can trigger a real tool call: the browser
+   demo (`demo/main.js`'s `TOOL_DEFS`/`runTool`, proxied by
+   `demo/server.py`'s `/api/mcp/call` route) executes both tools
+   client-side — `speech-gateway` itself is untouched, since tool
+   execution is the client's responsibility under the OpenAI Realtime
+   protocol it implements. Verified directly via
+   `./scripts/smoke-test.sh mcp`. See
+   [`speech-mcp/README.md`](speech-mcp/README.md) for how to run/test it
+   and the full proposal at
+   [`mcp/speech-mcp-mcp-experiment-proposal.md`](mcp/speech-mcp-mcp-experiment-proposal.md)
+   for the tool set, security model, and benchmark plan (does the extra
+   LLM round-trip for tool calls actually earn its latency cost? —
+   not yet measured).
 
 The key principle remains:
 

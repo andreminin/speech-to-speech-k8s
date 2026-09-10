@@ -2,7 +2,7 @@
 # Per-service smoke tests for Phases B/C/D. Run via kubectl port-forward so
 # it works from outside the cluster too.
 #
-# Usage: ./scripts/smoke-test.sh <llm|stt|tts|gateway> [args]
+# Usage: ./scripts/smoke-test.sh <llm|stt|tts|gateway|mcp> [args]
 set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-speech}"
@@ -85,8 +85,43 @@ async def main():
 asyncio.run(main())
 PY
     ;;
+  mcp)
+    # PoC-only: speech-mcp isn't wired into speech-gateway yet (see
+    # speech-mcp/README.md), so this drives its tools directly.
+    # Requires: pip install "mcp>=2,<3"
+    pid=$(pf speech-mcp 18090 8080)
+    trap 'kill "${pid}" 2>/dev/null || true' EXIT
+    python3 - <<'PY'
+import asyncio
+
+async def main():
+    from mcp import Client
+
+    async with Client("http://localhost:18090/mcp") as client:
+        tools = await client.list_tools()
+        names = sorted(t.name for t in tools.tools)
+        print("-- tools/list:", names)
+        assert "local_time" in names and "global_internet_search" in names, names
+
+        for tz in ("UTC", "Asia/Tokyo"):
+            result = await client.call_tool("local_time", {"timezone": tz})
+            print(f"-- local_time({tz}):", result.structured_content)
+
+        result = await client.call_tool(
+            "global_internet_search", {"query": "current weather forecast", "max_results": 3}
+        )
+        results = (result.structured_content or {}).get("results", [])
+        print(f"-- global_internet_search: {len(results)} result(s)")
+        for r in results:
+            print("   -", r.get("title"), "|", r.get("url"))
+        assert results, "expected at least one search result"
+        print("-- mcp smoke test OK")
+
+asyncio.run(main())
+PY
+    ;;
   *)
-    echo "usage: $0 <llm|stt|tts|gateway> [args]" >&2
+    echo "usage: $0 <llm|stt|tts|gateway|mcp> [args]" >&2
     exit 1
     ;;
 esac

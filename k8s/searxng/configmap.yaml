@@ -1,0 +1,28 @@
+# Minimal settings.yml override for the searxng/searxng image.
+# `use_default_settings: true` inherits everything else from the image's
+# built-in defaults - only what's listed below actually changes.
+#
+# JSON output is off by default (a deliberate anti-abuse measure on
+# public instances - see docs.searxng.org) and returns HTTP 403 without
+# this. This instance is ClusterIP-only (see deployment.yaml), never
+# reachable outside the cluster, so enabling it here is low-risk.
+#
+# secret_key is an HMAC key for session/CSRF signing, not really a
+# "credential" in the usual sense - fine as a ConfigMap rather than a
+# Secret for an internal-only instance. Regenerate with `openssl rand
+# -hex 32` if you want a fresh one; it doesn't need to be kept secret to
+# use this deployment safely, since nothing external can reach it.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: searxng-settings
+  namespace: speech
+data:
+  settings.yml: |
+    use_default_settings: true
+    server:
+      secret_key: "c6913586a7e5214a453763266366cdc5530bd0f0932610a3abbb20d6f7fc8681"
+    search:
+      formats:
+        - html
+        - json

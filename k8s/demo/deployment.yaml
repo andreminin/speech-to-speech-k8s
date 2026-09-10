@@ -1,8 +1,10 @@
-# Browser voice-chat UI - upstream huggingface/speech-to-speech's own
-# `demo/` app, unmodified (same "thin wrapper around upstream" convention as
-# gateway/Dockerfile). No Dockerfile of ours needed: demo/ ships its own,
-# built directly from the upstream checkout:
-#   docker build -t local-registry:5000/speech-demo:<tag> /path/to/speech-to-speech-checkout/demo
+# Browser voice-chat UI - built from upstream huggingface/speech-to-speech's
+# `demo/` app plus this repo's vendored, patched demo/Dockerfile, server.py
+# and main.js (the /api/mcp/call proxy + local_time/global_internet_search
+# tools - see speech-mcp/README.md and those files' header comments).
+# Build with scripts/build-and-push.sh, or directly:
+#   docker build -f demo/Dockerfile -t local-registry:5000/speech-demo:<tag> \
+#     --build-context patches=demo /path/to/speech-to-speech-checkout/demo
 #
 # SPEECH_TO_SPEECH_URL must be the Ingress's externally-reachable wss://
 # address, NOT a cluster-internal Service DNS name and NOT the plain
@@ -31,7 +33,7 @@ spec:
         - name: local-registry-cred
       containers:
         - name: speech-demo
-          image: local-registry:5000/speech-demo:v1
+          image: local-registry:5000/speech-demo:v2
           imagePullPolicy: IfNotPresent
           env:
             - name: SPEECH_TO_SPEECH_URL
@@ -41,6 +43,10 @@ spec:
             # testing unambiguous. Remove this to restore the greeting.
             - name: STARTUP_GREETING
               value: ""
+            # speech-mcp's Streamable HTTP endpoint, proxied by /api/mcp/call
+            # (server.py) for the local_time/global_internet_search tools.
+            - name: MCP_SERVER_URL
+              value: "http://speech-mcp:8080/mcp"
           ports:
             - containerPort: 7860
           resources:

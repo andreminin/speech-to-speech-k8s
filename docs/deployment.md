@@ -650,3 +650,84 @@ already built into `stt/app/main.py` and `tts/app/main.py` - see
 WebRTC, gRPC internal transport, OpenTelemetry, multi-replica/HA. Not
 started - see `docs/architecture.md`. (The browser `demo/` frontend
 previously listed here is done - see Phase E.2 above.)
+
+## Phase H - MCP support
+
+**Server PoC done (2026-09-10); wired into the voice pipeline (Phase 4,
+demo-side) same day.** Full proposal - tool set, security model,
+benchmark plan - at
+[`mcp/speech-mcp-mcp-experiment-proposal.md`](../mcp/speech-mcp-mcp-experiment-proposal.md);
+day-to-day usage in [`speech-mcp/README.md`](../speech-mcp/README.md).
+
+What's running: a Go MCP server (`speech-mcp`, `k8s/speech-mcp/`) on
+`node1`, exposing two tools over MCP Streamable HTTP -
+- `local_time` (pure computation, no dependencies)
+- `global_internet_search`, backed by a self-hosted SearXNG instance
+  (`k8s/searxng/` - open-source metasearch, JSON API enabled, no API
+  key/account needed, ClusterIP-only)
+
+Verified directly via `./scripts/smoke-test.sh mcp` (the official Python
+MCP client, `pip install "mcp>=2,<3"`): `tools/list` shows both tools,
+`local_time` returns correct offsets for different timezones (e.g. UTC
+vs `Asia/Tokyo`, a 9-hour difference), and `global_internet_search`
+returns real, relevant, structured results from live search engines.
+
+**Gateway/voice integration (Phase 4) - demo-side, not a gateway patch.**
+Investigating upstream `speech_to_speech`'s actual source showed that
+`speech-gateway`'s LLM handler already fully supports `tools`/
+`tool_choice` end-to-end (forwarding whatever `tools` the client supplies
+via the Realtime protocol's `session.update`/`response.create`, and
+already parsing `ResponseFunctionToolCall` items into a structured
+`ToolCall` event) - but tool **execution** is explicitly the client's
+job under the OpenAI Realtime protocol, not the gateway's. The demo app
+already had a complete, generic client-side tool-execution framework
+(`TOOL_DEFS`/`runTool`/`activeToolDefs`, previously powering `web_search`
+and `camera_snapshot`), so Phase 4 extends that instead of patching
+`speech-gateway` - keeping the gateway an unmodified implementation of
+the protocol, per this project's usual convention.
+
+Concretely: `speech-mcp` now runs with
+`StreamableHTTPOptions.JSONResponse: true` (plain JSON `tools/call`
+responses, not SSE), and this repo vendors patched copies of upstream's
+`demo/server.py` (a new `/api/mcp/call` proxy route, mirroring how
+`/api/search` already holds the Serper key server-side - see that
+file's header comment) and `demo/main.js` (`local_time` and
+`global_internet_search` added to `TOOL_DEFS`, dispatched in `runTool`,
+always included in `activeToolDefs`) alongside the already-vendored
+`demo/Dockerfile`, injected via a second, named Docker build context
+(`--build-context patches=...`) since the main build context is still
+the upstream checkout. `k8s/demo/deployment.yaml` adds
+`MCP_SERVER_URL=http://speech-mcp:8080/mcp`.
+
+**Deliberately deferred, not part of this PoC**:
+- `local_cluster_search` - would need Kubernetes RBAC +
+  `k8s.io/client-go`; neither of the two PoC tools touches the
+  Kubernetes API at all, so none of that plumbing exists yet.
+- Metrics, correlation IDs, auth (proposal §24-25, §34 "Future" list).
+- A Settings-panel toggle for the two new tools (they're unconditionally
+  on, matching the existing toggle-less pattern until one is needed).
+
+Build/deploy:
+```bash
+./scripts/build-and-push.sh <tag>   # builds+pushes speech-mcp (own Dockerfile)
+# searxng is a third-party image - mirror it instead (scripts/mirror-images.sh's
+# `searxng` entry, or manually: docker pull/tag/push docker.io/searxng/searxng:<tag>)
+./scripts/deploy.sh searxng
+./scripts/deploy.sh speech_mcp
+./scripts/smoke-test.sh mcp
+
+# speech-demo picks up the new /api/mcp/call route + tools on its next
+# rebuild (build-and-push.sh already passes the extra --build-context):
+./scripts/build-and-push.sh <tag>
+./scripts/deploy.sh demo
+```
+
+Manual verification (no mic/browser needed): through Traefik,
+```bash
+curl -k -X POST https://<node-ip>:30443/api/mcp/call \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"local_time","arguments":{"timezone":"Asia/Tokyo"}}'
+```
+should return `{"output": "..."}` with the current time. Full
+confirmation that the model actually calls the tools needs a real
+voice question in the browser (e.g. "what time is it in Tokyo?").

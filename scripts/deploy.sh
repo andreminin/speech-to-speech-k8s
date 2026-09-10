@@ -3,7 +3,7 @@
 # Idempotent (kubectl apply) — safe to re-run after edits.
 #
 # Usage: ./scripts/deploy.sh [phase]
-#   phase: all (default) | scaffolding | llm | stt | tts | gateway | traefik | demo
+#   phase: all (default) | scaffolding | llm | stt | tts | gateway | traefik | demo | searxng | speech_mcp
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -58,13 +58,28 @@ demo() {
   kubectl apply -f "${K8S}/demo/deployment.yaml"
 }
 
+# searxng backs speech-mcp's global_internet_search tool - deploy it
+# first so speech-mcp's readiness check has something to find.
+searxng() {
+  echo "== searxng (self-hosted search backend for speech-mcp)"
+  kubectl apply -f "${K8S}/searxng/configmap.yaml"
+  kubectl apply -f "${K8S}/searxng/deployment.yaml"
+}
+
+speech_mcp() {
+  echo "== speech-mcp (experimental MCP server - PoC, not yet gateway-wired)"
+  kubectl apply -f "${K8S}/speech-mcp/deployment.yaml"
+}
+
 case "${PHASE}" in
-  all) scaffolding; llm; stt_tts; gateway; traefik; demo ;;
+  all) scaffolding; llm; stt_tts; gateway; traefik; demo; searxng; speech_mcp ;;
   scaffolding) scaffolding ;;
   llm) llm ;;
   stt|tts|stt_tts) stt_tts ;;
   gateway) gateway ;;
   traefik) traefik ;;
   demo) demo ;;
+  searxng) searxng ;;
+  speech_mcp|speech-mcp|mcp) speech_mcp ;;
   *) echo "unknown phase: ${PHASE}" >&2; exit 1 ;;
 esac

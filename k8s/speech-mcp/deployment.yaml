@@ -1,0 +1,75 @@
+# Experimental MCP server (see speech-mcp/README.md and
+# mcp/speech-mcp-mcp-experiment-proposal.md). CPU-only, no GPU - pinned
+# to node1 alongside speech-gateway/speech-demo (already the CPU-oriented
+# infrastructure node). Not exposed outside the cluster: only meant to be
+# called from speech-gateway once that integration exists (not yet
+# built - see the proposal's Phase 4-5).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: speech-mcp
+  namespace: speech
+  labels:
+    app: speech-mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: speech-mcp
+  template:
+    metadata:
+      labels:
+        app: speech-mcp
+    spec:
+      nodeName: node1
+      imagePullSecrets:
+        - name: local-registry-cred
+      containers:
+        - name: speech-mcp
+          image: local-registry:5000/speech-mcp:v2
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MCP_HTTP_ADDR
+              value: ":8080"
+            - name: SEARCH_API_URL
+              value: "http://searxng:8080/search"
+            - name: TOOL_MAX_RESULTS
+              value: "5"
+            - name: TOOL_TIMEOUT
+              value: "5s"
+            - name: MCP_DEFAULT_TIMEZONE
+              value: "UTC"
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: "100m"
+              memory: 128Mi
+            limits:
+              cpu: "500m"
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: speech-mcp
+  namespace: speech
+spec:
+  type: ClusterIP
+  selector:
+    app: speech-mcp
+  ports:
+    - port: 8080
+      targetPort: 8080

@@ -26,6 +26,10 @@ echo "== speech-tts"
 docker build -t "${REGISTRY}/speech-tts:${TAG}" "${ROOT_DIR}/tts"
 docker push "${REGISTRY}/speech-tts:${TAG}"
 
+echo "== speech-mcp"
+docker build -t "${REGISTRY}/speech-mcp:${TAG}" "${ROOT_DIR}/speech-mcp"
+docker push "${REGISTRY}/speech-mcp:${TAG}"
+
 echo "== speech-gateway (build context: ${UPSTREAM_CHECKOUT})"
 if [[ ! -d "${UPSTREAM_CHECKOUT}" ]]; then
   echo "error: ${UPSTREAM_CHECKOUT} not found — pass the path to a" >&2
@@ -44,10 +48,15 @@ if [[ ! -d "${UPSTREAM_CHECKOUT}/demo" ]]; then
   exit 1
 fi
 # demo/Dockerfile here is a patched copy of upstream's own (see the file's
-# header comment) — context is still the checkout's demo/ dir, not vendored.
-docker build -f "${ROOT_DIR}/demo/Dockerfile" -t "${REGISTRY}/speech-demo:${TAG}" "${UPSTREAM_CHECKOUT}/demo"
+# header comment) — main context is still the checkout's demo/ dir, not
+# vendored; server.py/main.js are overridden from this repo's own vendored,
+# patched copies (the /api/mcp/call proxy) via a second, named build context.
+docker build -f "${ROOT_DIR}/demo/Dockerfile" -t "${REGISTRY}/speech-demo:${TAG}" \
+  --build-context "patches=${ROOT_DIR}/demo" \
+  "${UPSTREAM_CHECKOUT}/demo"
 docker push "${REGISTRY}/speech-demo:${TAG}"
 
 echo
-echo "Pushed ${REGISTRY}/{speech-stt,speech-tts,speech-gateway,speech-demo}:${TAG}"
+echo "Pushed ${REGISTRY}/{speech-stt,speech-tts,speech-mcp,speech-gateway,speech-demo}:${TAG}"
 echo "Update the image: tags in k8s/*/deployment.yaml to match if not using 'latest'."
+echo "(searxng is a third-party image - see scripts/mirror-images.sh instead.)"
