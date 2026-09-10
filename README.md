@@ -11,8 +11,8 @@ The starting point is a home Kubernetes lab with three GPU worker nodes:
 | Node | GPU | VRAM | Intended role |
 |---|---|---:|---|
 | `node1` | NVIDIA GeForce GTX 1650 | 4 GB | gateway / VAD / lightweight workloads |
-| `node2` | NVIDIA GeForce RTX 4060 Ti | 16 GB | STT and/or TTS |
-| `node3` | NVIDIA GeForce RTX 5060 Ti | 16 GB | LLM and/or TTS |
+| `node2` | NVIDIA GeForce RTX 4060 Ti | 16 GB | LLM |
+| `node3` | NVIDIA GeForce RTX 5060 Ti | 16 GB | STT and TTS |
 
 The nodes are connected by a **10 Gbit/s network**.
 
