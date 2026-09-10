@@ -154,7 +154,7 @@ Streaming gRPC is therefore an experiment for the future, not a current requirem
 
 The system runs on a four-node bare-metal Kubernetes cluster.
 
-## As-built cluster - 2026-09-09
+## As-built cluster - Sep 2026
 
 | Node    | Role                   | Kubernetes | CPU  | RAM    | GPU         | GPU VRAM | Internal IP     |
 | ------- | ---------------------- | ---------- | ---- | ------ | ----------- | -------- | --------------- |
