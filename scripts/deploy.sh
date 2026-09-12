@@ -67,7 +67,7 @@ searxng() {
 }
 
 speech_mcp() {
-  echo "== speech-mcp (experimental MCP server - PoC, not yet gateway-wired)"
+  echo "== speech-mcp (experimental MCP server)"
   kubectl apply -f "${K8S}/speech-mcp/deployment.yaml"
 }
 

@@ -26,7 +26,7 @@ metadata:
 spec:
   replicas: 1
   strategy:
-    type: Recreate   # single node GPU - a surge pod could never schedule anyway
+    type: Recreate
   selector:
     matchLabels:
       app: speech-stt-tts

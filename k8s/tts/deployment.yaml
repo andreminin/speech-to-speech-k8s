@@ -8,7 +8,7 @@ metadata:
 spec:
   replicas: 1
   strategy:
-    type: Recreate   # single node GPU - a surge pod could never schedule anyway
+    type: Recreate
   selector:
     matchLabels:
       app: speech-tts
@@ -18,7 +18,7 @@ spec:
         app: speech-tts
     spec:
       runtimeClassName: nvidia
-      nodeName: node3   # model will be on node3
+      nodeName: node3
       imagePullSecrets:
         - name: local-registry-cred
       containers:
@@ -27,11 +27,11 @@ spec:
           imagePullPolicy: IfNotPresent
           env:
             - name: TTS_MODEL_NAME
-              value: "/models"   # local dir, mounted below - avoids any HF Hub lookup
+              value: "/models"
             - name: TTS_DEVICE
               value: "cuda"
             - name: TTS_BACKEND
-              value: "torch"   # matches the safetensors checkpoint on disk, not a gguf
+              value: "torch"
             - name: HF_HUB_OFFLINE
               value: "1"
             - name: TRANSFORMERS_OFFLINE
