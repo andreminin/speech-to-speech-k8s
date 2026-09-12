@@ -1,18 +1,30 @@
 #!/usr/bin/env bash
 # Safely quiesce the cluster before powering the nodes off (planned reboot,
-# maintenance, etc). Cordons + drains every worker so Deployments scale down
-# cleanly instead of being force-evicted later by NodeNotReady taints -
-# that's what caused the zombie-pod pile-up in the `speech` namespace
-# (500+ ContainerStatusUnknown pods, nvidia.com/gpu "no healthy devices"
-# storm) after a previous ungraceful node loss. Draining first avoids that.
+# maintenance, etc).
 #
-# By default this only cordons/drains - it does NOT power anything off.
+# The important part: every Deployment in the '${NAMESPACE}' namespace is
+# scaled to 0 FIRST, and we wait for those pods to actually terminate,
+# before touching cordon/drain at all. This is what actually prevents the
+# zombie-pod churn seen previously - if no pod object exists for
+# speech-llm/speech-stt-tts while the nodes are down, there is nothing for
+# the scheduler to keep re-placing against a not-yet-healthy GPU device
+# plugin when the nodes come back (that race is what produced hundreds of
+# ContainerStatusUnknown/UnexpectedAdmissionError pods last time). Cordon +
+# drain afterwards is just a backstop for anything scale-down didn't catch
+# (there shouldn't be much - everything else on these nodes is a DaemonSet,
+# which drain leaves alone anyway).
+#
+# Each Deployment's pre-shutdown replica count is recorded as an annotation
+# (speech.cluster/prev-replicas) so cluster-start.sh can restore exactly
+# what was running, rather than assuming everything is always 1 replica.
+#
+# By default this only quiesces + drains - it does NOT power anything off.
 # Pass --poweroff to also run `sudo shutdown -h now` over SSH on every node
 # (workers first, control-plane last). None of the nodes have passwordless
 # sudo configured, so you'll be prompted for the sudo password per node.
 #
 # Usage: ./scripts/cluster-stop.sh [--poweroff] [--yes] [--skip-snapshot]
-#   --poweroff       also power off every node via SSH once drained
+#   --poweroff       also power off every node via SSH once quiesced
 #   --yes            skip the confirmation prompt (only relevant with --poweroff)
 #   --skip-snapshot  skip the best-effort etcd snapshot on the control-plane node
 set -euo pipefail
@@ -20,6 +32,8 @@ set -euo pipefail
 NAMESPACE="${NAMESPACE:-speech}"
 CONTROL_PLANE="${CONTROL_PLANE:-node0}"
 WORKERS=(node1 node2 node3)
+REPLICAS_ANNOTATION="speech.cluster/prev-replicas"
+SCALE_DOWN_TIMEOUT=120
 
 POWEROFF=false
 CONFIRM=false
@@ -45,26 +59,57 @@ if ! $SKIP_SNAPSHOT; then
     || echo "warning: etcd snapshot failed or was skipped - continuing anyway" >&2
 fi
 
+echo "== recording current replica counts and scaling every '${NAMESPACE}' Deployment to 0"
+mapfile -t DEPLOYMENTS < <(kubectl -n "${NAMESPACE}" get deployments -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
+if [[ ${#DEPLOYMENTS[@]} -eq 0 ]]; then
+  echo "  (no Deployments found in '${NAMESPACE}' - nothing to scale down)"
+fi
+for d in "${DEPLOYMENTS[@]}"; do
+  current="$(kubectl -n "${NAMESPACE}" get deployment "$d" -o jsonpath='{.spec.replicas}')"
+  echo "-- ${d}: ${current} -> 0 (saved as ${REPLICAS_ANNOTATION})"
+  kubectl -n "${NAMESPACE}" annotate deployment "$d" "${REPLICAS_ANNOTATION}=${current}" --overwrite >/dev/null
+  kubectl -n "${NAMESPACE}" scale deployment "$d" --replicas=0 >/dev/null
+done
+
+if [[ ${#DEPLOYMENTS[@]} -gt 0 ]]; then
+  echo "== waiting up to ${SCALE_DOWN_TIMEOUT}s for pods to terminate"
+  deadline=$(( $(date +%s) + SCALE_DOWN_TIMEOUT ))
+  while true; do
+    remaining="$(kubectl -n "${NAMESPACE}" get pods --no-headers 2>/dev/null | grep -vc '^$' || true)"
+    if [[ "${remaining}" -eq 0 ]]; then
+      echo "  all pods terminated"
+      break
+    fi
+    if (( $(date +%s) > deadline )); then
+      echo "warning: ${remaining} pod(s) still present after ${SCALE_DOWN_TIMEOUT}s - continuing anyway (drain below will force the issue)" >&2
+      kubectl -n "${NAMESPACE}" get pods
+      break
+    fi
+    sleep 3
+  done
+fi
+
 echo "== cordoning workers"
 for n in "${WORKERS[@]}"; do
   kubectl cordon "$n"
 done
 
-echo "== draining workers"
+echo "== draining workers (backstop - everything app-level should already be gone)"
 for n in "${WORKERS[@]}"; do
   echo "-- draining $n"
   kubectl drain "$n" --ignore-daemonsets --delete-emptydir-data --force --timeout=180s
 done
 
 echo
-echo "== drained. Current '${NAMESPACE}' namespace state:"
+echo "== quiesced. Current '${NAMESPACE}' namespace state:"
 kubectl -n "${NAMESPACE}" get pods -o wide
 
 if ! $POWEROFF; then
   cat <<EOF
 
-Nodes are cordoned + drained but still powered on. Power the machines off
-yourself now, or re-run this script with --poweroff to do it from here.
+Nodes are cordoned + drained, and every Deployment is scaled to 0. Power the
+machines off yourself now, or re-run this script with --poweroff to do it
+from here.
 EOF
   exit 0
 fi
@@ -76,7 +121,7 @@ This will run 'sudo shutdown -h now' over SSH on: ${WORKERS[*]}, then ${CONTROL_
 You'll be prompted for the sudo password on each node.
 EOF
   read -rp "Type 'yes' to continue: " reply
-  [[ "${reply}" == "yes" ]] || { echo "Aborted (nodes remain drained, not powered off)."; exit 1; }
+  [[ "${reply}" == "yes" ]] || { echo "Aborted (nodes remain quiesced, not powered off)."; exit 1; }
 fi
 
 echo "== powering off workers"
